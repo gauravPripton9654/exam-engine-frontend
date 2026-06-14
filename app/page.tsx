@@ -1,65 +1,136 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { examConfig } from '@/lib/questions';
+
+export default function HomePage() {
+  const router = useRouter();
+  const [form, setForm]     = useState({ name: '', id: '', email: '' });
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const validate = () => {
+    const e: Record<string, string> = {};
+    if (!form.name.trim()) e.name = 'Full name is required';
+    if (!form.id.trim())   e.id   = 'Candidate ID is required';
+    if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email))
+      e.email = 'Invalid email';
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  };
+
+  const handleStart = () => {
+    if (!validate()) return;
+    const params = new URLSearchParams({ name: form.name, id: form.id, email: form.email });
+    router.push(`/exam?${params.toString()}`);
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center p-6">
+      {/* Header */}
+      <div className="text-center mb-10">
+        <div className="inline-flex items-center gap-3 mb-4">
+          <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center text-2xl">
+            🎓
+          </div>
+          <h1 className="text-3xl font-bold text-white">ProctorAI</h1>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+        <p className="text-gray-400">AI-Powered Online Examination Platform</p>
+      </div>
+
+      <div className="w-full max-w-2xl grid md:grid-cols-2 gap-6">
+        {/* Exam Info Card */}
+        <div className="bg-gray-900 rounded-2xl border border-gray-700 p-6">
+          <h2 className="text-lg font-bold text-white mb-4">Exam Details</h2>
+          <div className="space-y-3">
+            {[
+              { icon: '📝', label: 'Exam',           value: examConfig.name },
+              { icon: '❓', label: 'Questions',       value: `${examConfig.questions.length} MCQ` },
+              { icon: '⏱', label: 'Duration',        value: `${examConfig.duration / 60} minutes` },
+              { icon: '🛡', label: 'Max Violations',  value: `${examConfig.maxViolations}` },
+            ].map(({ icon, label, value }) => (
+              <div key={label} className="flex items-center gap-3 py-2 border-b border-gray-800">
+                <span className="text-xl">{icon}</span>
+                <div>
+                  <p className="text-xs text-gray-500">{label}</p>
+                  <p className="text-sm text-white font-medium">{value}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 bg-blue-900/20 border border-blue-800 rounded-xl p-3">
+            <p className="text-xs text-blue-400 font-semibold mb-2">Active Monitoring</p>
+            <div className="grid grid-cols-2 gap-1">
+              {[
+                '🔄 Tab Monitoring',
+                '📸 Auto Snapshots',
+                '🖱 Right-click Block',
+                '⛶ Fullscreen Lock',
+              ].map(f => (
+                <p key={f} className="text-xs text-blue-300">{f}</p>
+              ))}
+            </div>
+          </div>
         </div>
-      </main>
+
+        {/* Registration Card */}
+        <div className="bg-gray-900 rounded-2xl border border-gray-700 p-6">
+          <h2 className="text-lg font-bold text-white mb-4">Candidate Login</h2>
+
+          <div className="space-y-4">
+            <div>
+              <label className="text-xs text-gray-400 font-medium block mb-1">Full Name *</label>
+              <input
+                type="text"
+                value={form.name}
+                onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
+                placeholder="Enter your full name"
+                className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-white
+                           placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+              />
+              {errors.name && <p className="text-red-400 text-xs mt-1">{errors.name}</p>}
+            </div>
+
+            <div>
+              <label className="text-xs text-gray-400 font-medium block mb-1">Candidate ID *</label>
+              <input
+                type="text"
+                value={form.id}
+                onChange={e => setForm(p => ({ ...p, id: e.target.value }))}
+                placeholder="e.g. CAND-2024-001"
+                className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-white
+                           placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+              />
+              {errors.id && <p className="text-red-400 text-xs mt-1">{errors.id}</p>}
+            </div>
+
+            <div>
+              <label className="text-xs text-gray-400 font-medium block mb-1">Email (optional)</label>
+              <input
+                type="email"
+                value={form.email}
+                onChange={e => setForm(p => ({ ...p, email: e.target.value }))}
+                placeholder="your@email.com"
+                className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-white
+                           placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+              />
+              {errors.email && <p className="text-red-400 text-xs mt-1">{errors.email}</p>}
+            </div>
+
+            <button
+              onClick={handleStart}
+              className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-sm transition-all mt-2"
+            >
+              Proceed to Exam →
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <p className="text-gray-600 text-xs mt-8 text-center">
+        By proceeding, you agree that your activity and periodic camera snapshots will be monitored during the exam.
+      </p>
     </div>
   );
 }

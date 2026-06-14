@@ -68,6 +68,12 @@ export interface ExamSession {
   status: 'setup' | 'in-progress' | 'submitted' | 'terminated';
 }
 
+export interface PeriodicSnapshot {
+  id: string;
+  timestamp: Date;
+  image: string;
+}
+
 export interface DetectionState {
   faceCount: number;
   phoneDetected: boolean;
