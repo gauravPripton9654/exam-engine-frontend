@@ -1,13 +1,26 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { examConfig } from '@/lib/questions';
 
 export default function HomePage() {
   const router = useRouter();
-  const [form, setForm]     = useState({ name: '', id: '', email: '' });
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [form, setForm]       = useState({ name: '', id: '', email: '' });
+  const [errors, setErrors]   = useState<Record<string, string>>({});
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Block mobile/tablet devices — exam requires a laptop or desktop
+  useEffect(() => {
+    const ua       = navigator.userAgent;
+    const mobileUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+    const small    = window.innerWidth < 1024;
+    setIsMobile(mobileUA || small);
+
+    const onResize = () => setIsMobile(window.innerWidth < 1024);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   const validate = () => {
     const e: Record<string, string> = {};
@@ -25,29 +38,46 @@ export default function HomePage() {
     router.push(`/exam?${params.toString()}`);
   };
 
+  // ── Mobile block screen ───────────────────────────────────────────────────────
+  if (isMobile) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center p-8 text-center">
+        <div className="text-7xl mb-6">💻</div>
+        <h1 className="text-2xl font-bold text-white mb-3">Desktop Required</h1>
+        <p className="text-gray-400 text-sm max-w-xs">
+          This exam must be taken on a <span className="text-white font-medium">laptop or desktop computer</span>.
+          Mobile phones and tablets are not allowed.
+        </p>
+        <div className="mt-8 bg-yellow-900/30 border border-yellow-700 rounded-xl p-4 max-w-xs">
+          <p className="text-yellow-300 text-xs">
+            Please switch to a desktop or laptop device and visit this page again to proceed.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Normal login screen ───────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center p-6">
-      {/* Header */}
       <div className="text-center mb-10">
         <div className="inline-flex items-center gap-3 mb-4">
-          <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center text-2xl">
-            🎓
-          </div>
+          <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center text-2xl">🎓</div>
           <h1 className="text-3xl font-bold text-white">ProctorAI</h1>
         </div>
         <p className="text-gray-400">AI-Powered Online Examination Platform</p>
       </div>
 
       <div className="w-full max-w-2xl grid md:grid-cols-2 gap-6">
-        {/* Exam Info Card */}
+        {/* Exam info */}
         <div className="bg-gray-900 rounded-2xl border border-gray-700 p-6">
           <h2 className="text-lg font-bold text-white mb-4">Exam Details</h2>
           <div className="space-y-3">
             {[
-              { icon: '📝', label: 'Exam',           value: examConfig.name },
-              { icon: '❓', label: 'Questions',       value: `${examConfig.questions.length} MCQ` },
-              { icon: '⏱', label: 'Duration',        value: `${examConfig.duration / 60} minutes` },
-              { icon: '🛡', label: 'Max Violations',  value: `${examConfig.maxViolations}` },
+              { icon: '📝', label: 'Exam',          value: examConfig.name },
+              { icon: '❓', label: 'Questions',      value: `${examConfig.questions.length} MCQ` },
+              { icon: '⏱', label: 'Duration',       value: `${examConfig.duration / 60} minutes` },
+              { icon: '🛡', label: 'Max Violations', value: `${examConfig.maxViolations}` },
             ].map(({ icon, label, value }) => (
               <div key={label} className="flex items-center gap-3 py-2 border-b border-gray-800">
                 <span className="text-xl">{icon}</span>
@@ -74,10 +104,9 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Registration Card */}
+        {/* Login form */}
         <div className="bg-gray-900 rounded-2xl border border-gray-700 p-6">
           <h2 className="text-lg font-bold text-white mb-4">Candidate Login</h2>
-
           <div className="space-y-4">
             <div>
               <label className="text-xs text-gray-400 font-medium block mb-1">Full Name *</label>

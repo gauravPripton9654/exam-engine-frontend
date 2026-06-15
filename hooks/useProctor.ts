@@ -10,6 +10,7 @@ interface UseProctorOptions {
 
 export interface ProctorState {
   isReady: boolean;
+  isFullscreen: boolean;
   violations: Violation[];
   periodicSnapshots: PeriodicSnapshot[];
   cameraError: string | null;
@@ -19,10 +20,11 @@ const SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 export function useProctor({ enabled, onNewViolation }: UseProctorOptions) {
   const [state, setState] = useState<ProctorState>({
-    isReady: false,
-    violations: [],
+    isReady:      false,
+    isFullscreen: false,
+    violations:   [],
     periodicSnapshots: [],
-    cameraError: null,
+    cameraError:  null,
   });
 
   const cooldownRef    = useRef<Partial<Record<ViolationType, number>>>({});
@@ -49,30 +51,59 @@ export function useProctor({ enabled, onNewViolation }: UseProctorOptions) {
     return violation;
   }, [onNewViolation]);
 
-  // ── Main effect: behavioural listeners + camera + snapshot timer ────────────
+  // ── Main effect ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!enabled) return;
-    setState(prev => ({ ...prev, isReady: true }));
+    // Sync fullscreen state immediately — the fullscreenchange event may have fired
+    // before this effect registered its listener (race condition on exam start).
+    setState(prev => ({ ...prev, isReady: true, isFullscreen: !!document.fullscreenElement }));
 
-    // Behavioural listeners
+    // Helper: push back into fullscreen (works reliably on visibilitychange + focus
+    // because browsers allow it when re-activating a page that was previously fullscreen)
+    const reenterFullscreen = () => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen?.().catch(() => {});
+      }
+    };
+
+    // Tab switch — log + attempt re-enter when coming back
     const onVisibility = () => {
-      if (document.hidden) addViolation('TAB_SWITCH', 'Candidate switched browser tab');
+      if (document.hidden) {
+        addViolation('TAB_SWITCH', 'Candidate switched browser tab');
+      } else {
+        reenterFullscreen();
+      }
     };
-    const onBlur      = () => addViolation('WINDOW_BLUR', 'Candidate switched to another application');
-    const onFsChange  = () => {
-      if (!document.fullscreenElement) addViolation('FULLSCREEN_EXIT', 'Candidate exited fullscreen');
+
+    // Window blur — log violation
+    const onBlur = () => addViolation('WINDOW_BLUR', 'Candidate switched to another application');
+
+    // Window focus — re-enter fullscreen when user returns
+    const onFocus = () => reenterFullscreen();
+
+    // Fullscreen change — track state + log violation + force back in
+    const onFsChange = () => {
+      const inFs = !!document.fullscreenElement;
+      setState(prev => ({ ...prev, isFullscreen: inFs }));
+      if (!inFs) {
+        addViolation('FULLSCREEN_EXIT', 'Candidate exited fullscreen');
+        reenterFullscreen();
+      }
     };
-    const onCtxMenu   = (e: MouseEvent) => {
+
+    // Right-click block
+    const onCtxMenu = (e: MouseEvent) => {
       e.preventDefault();
       addViolation('RIGHT_CLICK', 'Right-click blocked');
     };
 
     document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('blur', onBlur);
+    window.addEventListener('blur',  onBlur);
+    window.addEventListener('focus', onFocus);
     document.addEventListener('fullscreenchange', onFsChange);
-    document.addEventListener('contextmenu', onCtxMenu);
+    document.addEventListener('contextmenu',      onCtxMenu);
 
-    // Hidden camera stream for periodic snapshots
+    // ── Hidden camera for periodic snapshots ──────────────────────────────────
     let snapshotInterval: ReturnType<typeof setInterval> | null = null;
 
     navigator.mediaDevices
@@ -80,9 +111,9 @@ export function useProctor({ enabled, onNewViolation }: UseProctorOptions) {
       .then(stream => {
         streamRef.current = stream;
         const video = document.createElement('video');
-        video.muted      = true;
+        video.muted       = true;
         video.playsInline = true;
-        video.srcObject  = stream;
+        video.srcObject   = stream;
 
         video.onloadedmetadata = () => {
           video.play();
@@ -118,19 +149,16 @@ export function useProctor({ enabled, onNewViolation }: UseProctorOptions) {
 
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('blur', onBlur);
+      window.removeEventListener('blur',  onBlur);
+      window.removeEventListener('focus', onFocus);
       document.removeEventListener('fullscreenchange', onFsChange);
-      document.removeEventListener('contextmenu', onCtxMenu);
+      document.removeEventListener('contextmenu',      onCtxMenu);
       if (snapshotInterval) clearInterval(snapshotInterval);
       streamRef.current?.getTracks().forEach(t => t.stop());
       hiddenVideoRef.current = null;
-      setState(prev => ({ ...prev, isReady: false }));
+      setState(prev => ({ ...prev, isReady: false, isFullscreen: false }));
     };
   }, [enabled, addViolation]);
 
-  const requestFullscreen = useCallback(() => {
-    document.documentElement.requestFullscreen?.().catch(() => {});
-  }, []);
-
-  return { ...state, addViolation, requestFullscreen };
+  return { ...state, addViolation };
 }

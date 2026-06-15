@@ -25,7 +25,7 @@ export default function ExamInterface({ candidate, exam }: ExamInterfaceProps) {
   const {
     currentQuestionIndex, answers, markedForReview, timeRemaining, status, score,
     setAnswer, toggleMarkForReview, goToQuestion, nextQuestion, prevQuestion, submitExam,
-    terminateExam, startExam, getSessionData,
+    startExam, getSessionData,
   } = examState;
 
   useEffect(() => {
@@ -44,11 +44,12 @@ export default function ExamInterface({ candidate, exam }: ExamInterfaceProps) {
     onNewViolation: handleNewViolation,
   });
 
+  // Auto-submit when violation threshold is hit
   useEffect(() => {
     if (status === 'in-progress' && proctor.violations.length >= exam.maxViolations) {
-      terminateExam();
+      submitExam();
     }
-  }, [proctor.violations.length, exam.maxViolations, status, terminateExam]);
+  }, [proctor.violations.length, exam.maxViolations, status, submitExam]);
 
   const highViolations = proctor.violations.filter(v => v.severity === 'high').length;
 
@@ -136,6 +137,22 @@ export default function ExamInterface({ candidate, exam }: ExamInterfaceProps) {
   // ── Main exam layout ──────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col select-none">
+      {/* Fullscreen blocker — shown whenever the exam is in-progress but not fullscreen */}
+      {!proctor.isFullscreen && status === 'in-progress' && (
+        <div className="fixed inset-0 bg-black z-50 flex flex-col items-center justify-center text-center p-8">
+          <div className="text-6xl mb-5">⛶</div>
+          <h2 className="text-2xl font-bold text-white mb-2">Fullscreen Required</h2>
+          <p className="text-gray-400 text-sm mb-1">You exited fullscreen. The exam is paused.</p>
+          <p className="text-gray-500 text-xs mb-8">Return to fullscreen to continue. Each exit is a violation.</p>
+          <button
+            onClick={() => document.documentElement.requestFullscreen?.().catch(() => {})}
+            className="px-10 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-lg transition-colors"
+          >
+            Return to Fullscreen
+          </button>
+        </div>
+      )}
+
       {showWarning && latestViolation && (
         <WarningModal
           violation={latestViolation}
