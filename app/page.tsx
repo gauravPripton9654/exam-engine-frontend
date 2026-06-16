@@ -97,6 +97,11 @@ export default function HomePage() {
                 '📸 Auto Snapshots',
                 '🖱 Right-click Block',
                 '⛶ Fullscreen Lock',
+                '📋 Copy Protection',
+                '🔍 DevTools Block',
+                '⌨ Keyboard Guard',
+                '🖥 Mouse Monitor',
+                '🖵 Multi-Monitor Block',
               ].map(f => (
                 <p key={f} className="text-xs text-blue-300">{f}</p>
               ))}

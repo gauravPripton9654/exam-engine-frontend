@@ -8,22 +8,30 @@ export type ViolationType =
   | 'PASTE_ATTEMPT'
   | 'FULLSCREEN_EXIT'
   | 'RIGHT_CLICK'
-  | 'KEYBOARD_SHORTCUT';
+  | 'KEYBOARD_SHORTCUT'
+  | 'DEVTOOLS_OPEN'
+  | 'MOUSE_INACTIVE'
+  | 'SUSPICIOUS_MOUSE'
+  | 'EXTRA_MONITOR';
 
 export const VIOLATION_CONFIG: Record<
   ViolationType,
   { label: string; severity: 'low' | 'medium' | 'high'; cooldown: number }
 > = {
-  TAB_SWITCH:        { label: 'Tab Switch',         severity: 'high',   cooldown: 8000  },
-  MULTIPLE_FACES:    { label: 'Multiple Faces',     severity: 'high',   cooldown: 5000  },
-  NO_FACE:           { label: 'No Face Detected',   severity: 'medium', cooldown: 10000 },
-  PHONE_DETECTED:    { label: 'Phone Detected',     severity: 'high',   cooldown: 6000  },
-  WINDOW_BLUR:       { label: 'Window Changed',     severity: 'medium', cooldown: 8000  },
-  COPY_ATTEMPT:      { label: 'Copy Attempt',       severity: 'low',    cooldown: 3000  },
-  PASTE_ATTEMPT:     { label: 'Paste Attempt',      severity: 'low',    cooldown: 3000  },
-  FULLSCREEN_EXIT:   { label: 'Exited Fullscreen',  severity: 'high',   cooldown: 5000  },
-  RIGHT_CLICK:       { label: 'Right Click',        severity: 'low',    cooldown: 5000  },
-  KEYBOARD_SHORTCUT: { label: 'Blocked Shortcut',   severity: 'low',    cooldown: 3000  },
+  TAB_SWITCH:        { label: 'Tab Switch',         severity: 'high',   cooldown: 8000   },
+  MULTIPLE_FACES:    { label: 'Multiple Faces',     severity: 'high',   cooldown: 5000   },
+  NO_FACE:           { label: 'No Face Detected',   severity: 'medium', cooldown: 10000  },
+  PHONE_DETECTED:    { label: 'Phone Detected',     severity: 'high',   cooldown: 6000   },
+  WINDOW_BLUR:       { label: 'Window Changed',     severity: 'medium', cooldown: 8000   },
+  COPY_ATTEMPT:      { label: 'Copy Attempt',       severity: 'medium', cooldown: 3000   },
+  PASTE_ATTEMPT:     { label: 'Paste Attempt',      severity: 'medium', cooldown: 3000   },
+  FULLSCREEN_EXIT:   { label: 'Exited Fullscreen',  severity: 'high',   cooldown: 5000   },
+  RIGHT_CLICK:       { label: 'Right Click',        severity: 'low',    cooldown: 5000   },
+  KEYBOARD_SHORTCUT: { label: 'Blocked Shortcut',   severity: 'low',    cooldown: 3000   },
+  DEVTOOLS_OPEN:     { label: 'DevTools Detected',  severity: 'high',   cooldown: 30000  },
+  MOUSE_INACTIVE:    { label: 'Mouse Inactive',     severity: 'medium', cooldown: 180000 },
+  SUSPICIOUS_MOUSE:  { label: 'Suspicious Mouse',   severity: 'medium', cooldown: 60000  },
+  EXTRA_MONITOR:     { label: 'Extra Monitor',      severity: 'high',   cooldown: 30000  },
 };
 
 export interface Violation {

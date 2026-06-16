@@ -283,7 +283,7 @@ export default function ExamInterface({ candidate, exam }: ExamInterfaceProps) {
                 {proctor.periodicSnapshots.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-12 text-center">
                     <p className="text-gray-500 text-xs">No snapshots yet.</p>
-                    <p className="text-gray-600 text-xs mt-1">First snapshot in 5 minutes.</p>
+                    <p className="text-gray-600 text-xs mt-1">First snapshot in 2 minutes.</p>
                   </div>
                 ) : (
                   <div className="grid grid-cols-2 gap-2">
