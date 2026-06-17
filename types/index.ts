@@ -43,12 +43,75 @@ export interface Violation {
   severity: 'low' | 'medium' | 'high';
 }
 
+// ── API types ─────────────────────────────────────────────────────────────────
+
+export type QuestionType = 'MCQ' | 'Multi' | 'Match' | 'Fill';
+
+export interface McqOption {
+  id: number;
+  option_text: string;
+  sort_order: number;
+  is_correct: boolean;
+}
+
+export interface MatchPair {
+  id: number;
+  left_text: string;
+  right_text: string;
+  sort_order: number;
+}
+
+export interface FillBlank {
+  id: number;
+  blank_index: number;
+  accepted_answers: string[];
+  sort_order: number;
+}
+
+export interface ApiQuestion {
+  id: number;
+  qtype: QuestionType;
+  stem: string;
+  subject: string;
+  skill: string;
+  level: string;
+  rationale: string;
+  sort_order: number;
+  mcq_options: McqOption[];
+  match_pairs: MatchPair[];
+  fill_blanks: FillBlank[];
+}
+
+export interface CurriculumSummary {
+  id: number;
+  title: string;
+  role: string;
+  company: string;
+  sector: string;
+  n: number;
+}
+
+// ── Answer value per question type ────────────────────────────────────────────
+// MCQ:   number   (index into mcq_options)
+// Multi: number[] (indices of selected options)
+// Match: Record<number, number> (pair_id -> selected right option index among shuffled rights)
+// Fill:  Record<number, string> (blank_index -> user's typed answer)
+export type AnswerValue = number | number[] | Record<number, number> | Record<number, string>;
+
+// ── Question (runtime representation) ────────────────────────────────────────
 export interface Question {
   id: number;
-  text: string;
-  options: string[];
-  correctAnswer: number;
-  category: string;
+  qtype: QuestionType;
+  text: string;         // stem
+  category: string;     // subject
+  skill: string;
+  level: string;
+  // MCQ / Multi
+  options: McqOption[];
+  // Match
+  pairs: MatchPair[];
+  // Fill
+  blanks: FillBlank[];
 }
 
 export interface ExamConfig {
@@ -72,7 +135,7 @@ export interface ExamSession {
   startTime: Date;
   endTime?: Date;
   violations: Violation[];
-  answers: Record<number, number>;
+  answers: Record<number, AnswerValue>;
   status: 'setup' | 'in-progress' | 'submitted' | 'terminated';
 }
 

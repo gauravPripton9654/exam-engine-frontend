@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import api from "@/lib/api";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -463,13 +464,7 @@ export default function CurriculumImportPage() {
     if (!parsed) return;
     setSaveStatus("saving");
     try {
-      const res = await fetch("/api/curricula/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(parsed),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const { data } = await api.post<{ id: number }>("/curricula/", parsed);
       setSavedId(data.id);
       setSaveStatus("success");
     } catch (e) {

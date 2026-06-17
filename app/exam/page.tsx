@@ -3,8 +3,8 @@
 import { Suspense, useEffect, useRef, useState, useCallback } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
-import { examConfig } from '@/lib/questions';
-import { CandidateInfo } from '@/types';
+import { fetchCurriculum, fetchQuestions } from '@/lib/api';
+import { CandidateInfo, ExamConfig, ApiQuestion, Question } from '@/types';
 
 const ExamInterface = dynamic(() => import('@/components/ExamInterface'), {
   ssr: false,
@@ -12,25 +12,40 @@ const ExamInterface = dynamic(() => import('@/components/ExamInterface'), {
     <div className="min-h-screen bg-gray-950 flex items-center justify-center">
       <div className="text-center">
         <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-        <p className="text-gray-400">Loading exam...</p>
+        <p className="text-gray-400">Loading exam…</p>
       </div>
     </div>
   ),
 });
 
-type CameraStatus   = 'idle' | 'checking' | 'granted' | 'denied';
-type MonitorStatus  = 'unchecked' | 'ok' | 'extra_detected';
+type CameraStatus  = 'idle' | 'checking' | 'granted' | 'denied';
+type MonitorStatus = 'unchecked' | 'ok' | 'extra_detected';
+
+function toRuntimeQuestion(q: ApiQuestion): Question {
+  return {
+    id: q.id,
+    qtype: q.qtype,
+    text: q.stem,
+    category: q.subject,
+    skill: q.skill,
+    level: q.level,
+    options: [...q.mcq_options].sort((a, b) => a.sort_order - b.sort_order),
+    pairs: [...q.match_pairs].sort((a, b) => a.sort_order - b.sort_order),
+    blanks: [...q.fill_blanks].sort((a, b) => a.sort_order - b.sort_order),
+  };
+}
 
 function ExamPageContent() {
   const searchParams = useSearchParams();
   const router       = useRouter();
 
-  const [candidate, setCandidate]       = useState<CandidateInfo | null>(null);
-  const [started, setStarted]           = useState(false);
-  const [cameraStatus, setCameraStatus] = useState<CameraStatus>('idle');
-  const [isMobile, setIsMobile]         = useState(false);
-
-  // ── System check state ──────────────────────────────────────────────────────
+  const [candidate, setCandidate]         = useState<CandidateInfo | null>(null);
+  const [examConfig, setExamConfig]       = useState<ExamConfig | null>(null);
+  const [loadingExam, setLoadingExam]     = useState(true);
+  const [examError, setExamError]         = useState<string | null>(null);
+  const [started, setStarted]             = useState(false);
+  const [cameraStatus, setCameraStatus]   = useState<CameraStatus>('idle');
+  const [isMobile, setIsMobile]           = useState(false);
   const [monitorStatus, setMonitorStatus] = useState<MonitorStatus>('unchecked');
   const [declarations, setDeclarations]   = useState({
     noExternalKeyboard: false,
@@ -40,27 +55,44 @@ function ExamPageContent() {
   const previewVideoRef  = useRef<HTMLVideoElement>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
 
-  // Mobile detection — also block here in case someone bypasses home page
   useEffect(() => {
     const ua = navigator.userAgent;
     const mobileUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
     setIsMobile(mobileUA || window.innerWidth < 1024);
   }, []);
 
+  // Parse candidate info and load curriculum + questions
   useEffect(() => {
-    const name  = searchParams.get('name');
-    const id    = searchParams.get('id');
-    const email = searchParams.get('email');
-    if (!name || !id) { router.push('/'); return; }
-    setCandidate({ name, id, email: email ?? '' });
+    const name         = searchParams.get('name');
+    const email        = searchParams.get('email') ?? '';
+    const curriculumId = searchParams.get('curriculumId');
+
+    if (!name || !curriculumId) { router.push('/'); return; }
+
+    setCandidate({ name, id: curriculumId, email });
+
+    const id = Number(curriculumId);
+    Promise.all([fetchCurriculum(id), fetchQuestions(id)])
+      .then(([curriculum, apiQuestions]) => {
+        const questions = apiQuestions
+          .sort((a, b) => a.sort_order - b.sort_order)
+          .map(toRuntimeQuestion);
+        setExamConfig({
+          id: String(curriculum.id),
+          name: `${curriculum.title} — ${curriculum.role} @ ${curriculum.company}`,
+          duration: 60 * 60,
+          maxViolations: 5,
+          questions,
+        });
+      })
+      .catch(() => setExamError('Failed to load exam questions. Please go back and try again.'))
+      .finally(() => setLoadingExam(false));
   }, [searchParams, router]);
 
-  // Cleanup preview stream when component unmounts
   useEffect(() => {
     return () => { previewStreamRef.current?.getTracks().forEach(t => t.stop()); };
   }, []);
 
-  // ── Camera ──────────────────────────────────────────────────────────────────
   const requestCamera = async () => {
     setCameraStatus('checking');
     try {
@@ -76,17 +108,13 @@ function ExamPageContent() {
     }
   };
 
-  // ── System check ────────────────────────────────────────────────────────────
   const runMonitorCheck = useCallback(() => {
-    // screen.isExtended is true when a second display is connected in extended mode (Chrome 100+).
-    // Falls back to false (assume ok) on browsers that don't support the property.
     const extended = ('isExtended' in window.screen)
       ? (window.screen as typeof window.screen & { isExtended: boolean }).isExtended === true
       : false;
     setMonitorStatus(extended ? 'extra_detected' : 'ok');
   }, []);
 
-  // Auto-run monitor check as soon as camera is granted
   useEffect(() => {
     if (cameraStatus === 'granted') runMonitorCheck();
   }, [cameraStatus, runMonitorCheck]);
@@ -98,7 +126,6 @@ function ExamPageContent() {
 
   const canStart = cameraStatus === 'granted' && systemCheckPassed;
 
-  // ── Start exam ──────────────────────────────────────────────────────────────
   const handleStart = () => {
     previewStreamRef.current?.getTracks().forEach(t => t.stop());
     previewStreamRef.current = null;
@@ -108,45 +135,57 @@ function ExamPageContent() {
       .finally(() => setStarted(true));
   };
 
-  // ── Mobile block ─────────────────────────────────────────────────────────────
   if (isMobile) {
     return (
       <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center p-8 text-center">
         <div className="text-7xl mb-6">💻</div>
         <h1 className="text-2xl font-bold text-white mb-3">Desktop Required</h1>
         <p className="text-gray-400 text-sm max-w-xs">
-          This exam must be taken on a{' '}
-          <span className="text-white font-medium">laptop or desktop computer</span>.
-          Mobile phones and tablets are not allowed.
+          This exam must be taken on a <span className="text-white font-medium">laptop or desktop computer</span>.
         </p>
       </div>
     );
   }
 
-  if (!candidate) {
+  if (loadingExam) {
     return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center gap-4">
+        <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+        <p className="text-gray-400 text-sm">Loading exam questions…</p>
+      </div>
+    );
+  }
+
+  if (examError || !examConfig || !candidate) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center gap-4 p-6 text-center">
+        <div className="text-5xl">⚠️</div>
+        <p className="text-red-400 font-medium">{examError ?? 'Something went wrong.'}</p>
+        <button
+          onClick={() => router.push('/')}
+          className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-semibold transition-colors"
+        >
+          ← Go Back
+        </button>
       </div>
     );
   }
 
   if (started) return <ExamInterface candidate={candidate} exam={examConfig} />;
 
-  // ── Pre-exam start screen ─────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center p-6">
       <div className="w-full max-w-xl bg-gray-900 rounded-2xl border border-gray-700 p-8">
         <div className="text-center mb-6">
           <div className="text-5xl mb-4">📋</div>
-          <h2 className="text-2xl font-bold text-white">{examConfig.name}</h2>
-          <p className="text-gray-400 mt-1">Welcome, {candidate.name}</p>
+          <h2 className="text-xl font-bold text-white">{examConfig.name}</h2>
+          <p className="text-gray-400 mt-1 text-sm">Welcome, {candidate.name}</p>
         </div>
 
         {/* Exam details */}
         <div className="space-y-2 mb-6">
           {[
-            ['Questions',      `${examConfig.questions.length} Multiple Choice`],
+            ['Questions',      `${examConfig.questions.length}`],
             ['Duration',       `${examConfig.duration / 60} minutes`],
             ['Max Violations', `${examConfig.maxViolations} — exam auto-submits after this`],
           ].map(([label, value]) => (
@@ -157,7 +196,7 @@ function ExamPageContent() {
           ))}
         </div>
 
-        {/* ── Step 1: Camera access ──────────────────────────────────────────── */}
+        {/* Step 1: Camera */}
         <div className="mb-5">
           <StepHeader step={1} done={cameraStatus === 'granted'} label="Camera Access" />
 
@@ -207,7 +246,7 @@ function ExamPageContent() {
             <div className="bg-red-900/20 border border-red-700 rounded-xl p-4">
               <p className="text-red-400 text-sm font-semibold mb-1">Camera Access Denied</p>
               <p className="text-red-300/70 text-xs mb-3">
-                Allow camera access in your browser settings (address bar → camera icon) and try again.
+                Allow camera access in your browser settings and try again.
               </p>
               <button
                 onClick={requestCamera}
@@ -219,12 +258,11 @@ function ExamPageContent() {
           )}
         </div>
 
-        {/* ── Step 2: System check ───────────────────────────────────────────── */}
+        {/* Step 2: System check */}
         <div className={`mb-5 transition-opacity ${cameraStatus === 'granted' ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
           <StepHeader step={2} done={systemCheckPassed} label="System Check" />
 
           <div className="space-y-3">
-            {/* Monitor check */}
             <div className={`rounded-xl border p-3 ${
               monitorStatus === 'extra_detected'
                 ? 'bg-red-900/20 border-red-700'
@@ -237,39 +275,27 @@ function ExamPageContent() {
                   <span className="text-base">🖥</span>
                   <div>
                     <p className="text-xs font-semibold text-white">Display Check</p>
-                    {monitorStatus === 'unchecked' && (
-                      <p className="text-xs text-gray-400">Checking for extra monitors…</p>
-                    )}
-                    {monitorStatus === 'ok' && (
-                      <p className="text-xs text-green-400">✓ Single display detected</p>
-                    )}
-                    {monitorStatus === 'extra_detected' && (
-                      <p className="text-xs text-red-400">Extra monitor detected — please disconnect it</p>
-                    )}
+                    {monitorStatus === 'unchecked' && <p className="text-xs text-gray-400">Checking for extra monitors…</p>}
+                    {monitorStatus === 'ok'         && <p className="text-xs text-green-400">✓ Single display detected</p>}
+                    {monitorStatus === 'extra_detected' && <p className="text-xs text-red-400">Extra monitor detected — please disconnect it</p>}
                   </div>
                 </div>
                 {monitorStatus !== 'unchecked' && (
-                  <button
-                    onClick={runMonitorCheck}
-                    className="text-xs text-blue-400 hover:text-blue-300 underline shrink-0 ml-2"
-                  >
+                  <button onClick={runMonitorCheck} className="text-xs text-blue-400 hover:text-blue-300 underline shrink-0 ml-2">
                     Re-check
                   </button>
                 )}
               </div>
               {monitorStatus === 'extra_detected' && (
                 <p className="text-red-300/70 text-xs mt-2">
-                  Disconnect the extra monitor, then click <strong>Re-check</strong>. Using multiple
-                  displays during the exam is not permitted and will be flagged as a violation.
+                  Disconnect the extra monitor, then click <strong>Re-check</strong>.
                 </p>
               )}
             </div>
 
-            {/* Self-declarations — only shown once monitor is ok */}
             {monitorStatus === 'ok' && (
               <div className="bg-gray-800 border border-gray-600 rounded-xl p-3 space-y-2.5">
                 <p className="text-xs text-gray-400 font-semibold mb-1">Please confirm before continuing:</p>
-
                 <label className="flex items-start gap-3 cursor-pointer group">
                   <input
                     type="checkbox"
@@ -278,11 +304,9 @@ function ExamPageContent() {
                     className="mt-0.5 accent-blue-500 w-4 h-4 shrink-0"
                   />
                   <span className="text-xs text-gray-300 group-hover:text-white transition-colors leading-relaxed">
-                    I have <strong className="text-white">disconnected all external keyboards, mice,
-                    and recording devices</strong> from this computer.
+                    I have <strong className="text-white">disconnected all external keyboards, mice, and recording devices</strong> from this computer.
                   </span>
                 </label>
-
                 <label className="flex items-start gap-3 cursor-pointer group">
                   <input
                     type="checkbox"
@@ -291,8 +315,7 @@ function ExamPageContent() {
                     className="mt-0.5 accent-blue-500 w-4 h-4 shrink-0"
                   />
                   <span className="text-xs text-gray-300 group-hover:text-white transition-colors leading-relaxed">
-                    I have <strong className="text-white">closed all other applications</strong> (chat apps,
-                    browsers, note-taking tools, remote-access software) running in the background.
+                    I have <strong className="text-white">closed all other applications</strong> running in the background.
                   </span>
                 </label>
               </div>
@@ -300,7 +323,7 @@ function ExamPageContent() {
           </div>
         </div>
 
-        {/* ── Step 3: Proctoring rules ───────────────────────────────────────── */}
+        {/* Step 3: Rules */}
         <div className={`mb-6 transition-opacity ${systemCheckPassed && cameraStatus === 'granted' ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
           <StepHeader step={3} done={false} label="Proctoring Rules" />
           <div className="bg-yellow-900/30 border border-yellow-700 rounded-xl p-4">
@@ -318,7 +341,6 @@ function ExamPageContent() {
           </div>
         </div>
 
-        {/* ── Start button ───────────────────────────────────────────────────── */}
         <button
           onClick={handleStart}
           disabled={!canStart}
@@ -328,8 +350,8 @@ function ExamPageContent() {
               : 'bg-gray-700 text-gray-500 cursor-not-allowed'
           }`}
         >
-          {!cameraStatus.match(/granted/) ? 'Complete Step 1 First'
-            : !systemCheckPassed           ? 'Complete Step 2 First'
+          {cameraStatus !== 'granted' ? 'Complete Step 1 First'
+            : !systemCheckPassed      ? 'Complete Step 2 First'
             : 'Start Exam — Enter Fullscreen'}
         </button>
       </div>
@@ -337,7 +359,6 @@ function ExamPageContent() {
   );
 }
 
-// ── Small helper component ─────────────────────────────────────────────────────
 function StepHeader({ step, done, label }: { step: number; done: boolean; label: string }) {
   return (
     <div className="flex items-center gap-2 mb-3">

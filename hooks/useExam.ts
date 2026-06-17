@@ -1,18 +1,18 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { ExamConfig, CandidateInfo, Violation } from '@/types';
+import { ExamConfig, CandidateInfo, Violation, AnswerValue } from '@/types';
 
 type ExamStatus = 'setup' | 'in-progress' | 'submitted' | 'terminated';
 
 interface UseExamReturn {
   currentQuestionIndex: number;
-  answers: Record<number, number>;
+  answers: Record<number, AnswerValue>;
   markedForReview: Set<number>;
   timeRemaining: number;
   status: ExamStatus;
   score: number | null;
-  setAnswer: (questionId: number, optionIndex: number) => void;
+  setAnswer: (questionId: number, value: AnswerValue) => void;
   toggleMarkForReview: (questionId: number) => void;
   goToQuestion: (index: number) => void;
   nextQuestion: () => void;
@@ -23,21 +23,54 @@ interface UseExamReturn {
   getSessionData: (candidate: CandidateInfo, violations: Violation[]) => object;
 }
 
+function isCorrect(q: ExamConfig['questions'][number], answer: AnswerValue): boolean {
+  if (q.qtype === 'MCQ') {
+    // answer = index into q.options array
+    return q.options[answer as number]?.is_correct === true;
+  }
+
+  if (q.qtype === 'Multi') {
+    // answer = number[] of selected indices into q.options
+    const selected = answer as number[];
+    const correctCount = q.options.filter(o => o.is_correct).length;
+    if (selected.length !== correctCount) return false;
+    return selected.every(i => q.options[i]?.is_correct === true);
+  }
+
+  if (q.qtype === 'Match') {
+    // answer = Record<pairId, selectedPairId> — user maps each left to a right
+    const userMap = answer as Record<number, number>;
+    return q.pairs.every(pair => userMap[pair.id] === pair.id);
+  }
+
+  if (q.qtype === 'Fill') {
+    // answer = Record<blankIndex, userAnswer>
+    const userAnswers = answer as Record<number, string>;
+    return q.blanks.every(blank => {
+      const typed = (userAnswers[blank.blank_index] ?? '').trim().toLowerCase();
+      return blank.accepted_answers.map(a => a.toLowerCase()).includes(typed);
+    });
+  }
+
+  return false;
+}
+
 export function useExam(config: ExamConfig): UseExamReturn {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<number, number>>({});
+  const [answers, setAnswers] = useState<Record<number, AnswerValue>>({});
   const [markedForReview, setMarkedForReview] = useState<Set<number>>(new Set());
   const [timeRemaining, setTimeRemaining] = useState(config.duration);
   const [status, setStatus] = useState<ExamStatus>('setup');
   const [score, setScore] = useState<number | null>(null);
 
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<Date | null>(null);
 
-  const calculateScore = useCallback((currentAnswers: Record<number, number>) => {
+  const calculateScore = useCallback((currentAnswers: Record<number, AnswerValue>) => {
     let correct = 0;
     config.questions.forEach(q => {
-      if (currentAnswers[q.id] === q.correctAnswer) correct++;
+      const ans = currentAnswers[q.id];
+      if (ans !== undefined && isCorrect(q, ans)) correct++;
     });
     return Math.round((correct / config.questions.length) * 100);
   }, [config]);
@@ -51,17 +84,23 @@ export function useExam(config: ExamConfig): UseExamReturn {
 
   const submitExam = useCallback(() => {
     stopTimer();
-    const finalScore = calculateScore(answers);
-    setScore(finalScore);
+    setAnswers(prev => {
+      const finalScore = calculateScore(prev);
+      setScore(finalScore);
+      return prev;
+    });
     setStatus('submitted');
-  }, [answers, calculateScore, stopTimer]);
+  }, [calculateScore, stopTimer]);
 
   const terminateExam = useCallback(() => {
     stopTimer();
-    const finalScore = calculateScore(answers);
-    setScore(finalScore);
+    setAnswers(prev => {
+      const finalScore = calculateScore(prev);
+      setScore(finalScore);
+      return prev;
+    });
     setStatus('terminated');
-  }, [answers, calculateScore, stopTimer]);
+  }, [calculateScore, stopTimer]);
 
   const startExam = useCallback(() => {
     startTimeRef.current = new Date();
@@ -80,8 +119,8 @@ export function useExam(config: ExamConfig): UseExamReturn {
 
   useEffect(() => () => stopTimer(), [stopTimer]);
 
-  const setAnswer = useCallback((questionId: number, optionIndex: number) => {
-    setAnswers(prev => ({ ...prev, [questionId]: optionIndex }));
+  const setAnswer = useCallback((questionId: number, value: AnswerValue) => {
+    setAnswers(prev => ({ ...prev, [questionId]: value }));
   }, []);
 
   const toggleMarkForReview = useCallback((questionId: number) => {
@@ -92,9 +131,9 @@ export function useExam(config: ExamConfig): UseExamReturn {
     });
   }, []);
 
-  const goToQuestion   = useCallback((i: number) => setCurrentQuestionIndex(i), []);
-  const nextQuestion   = useCallback(() => setCurrentQuestionIndex(p => Math.min(p + 1, config.questions.length - 1)), [config.questions.length]);
-  const prevQuestion   = useCallback(() => setCurrentQuestionIndex(p => Math.max(p - 1, 0)), []);
+  const goToQuestion = useCallback((i: number) => setCurrentQuestionIndex(i), []);
+  const nextQuestion = useCallback(() => setCurrentQuestionIndex(p => Math.min(p + 1, config.questions.length - 1)), [config.questions.length]);
+  const prevQuestion = useCallback(() => setCurrentQuestionIndex(p => Math.max(p - 1, 0)), []);
 
   const getSessionData = useCallback((candidate: CandidateInfo, violations: Violation[]) => ({
     sessionId: `SESSION-${Date.now()}`,
