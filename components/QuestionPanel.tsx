@@ -9,7 +9,6 @@ interface QuestionPanelProps {
   markedForReview: Set<number>;
   onAnswer: (questionId: number, value: AnswerValue) => void;
   onToggleMark: (questionId: number) => void;
-  onNavigate: (index: number) => void;
   onPrev: () => void;
   onNext: () => void;
   onSubmit: () => void;
@@ -31,39 +30,53 @@ function isAnswered(q: Question, answers: Record<number, AnswerValue>): boolean 
   return false;
 }
 
-function navStyle(q: Question, index: number, current: number, answers: Record<number, AnswerValue>, marked: Set<number>) {
-  const base = 'w-8 h-8 rounded-lg text-xs font-semibold transition-all border ';
-  if (index === current)          return base + 'bg-blue-600 border-blue-400 text-white shadow-lg shadow-blue-900/50';
-  if (marked.has(q.id))          return base + 'bg-purple-900 border-purple-600 text-purple-200';
-  if (isAnswered(q, answers))    return base + 'bg-green-900 border-green-600 text-green-200';
-  return base + 'bg-gray-800 border-gray-600 text-gray-400 hover:border-gray-400';
-}
+const TYPE_META: Record<string, { label: string; pill: string; hint?: string }> = {
+  MCQ:   { label: 'Single Choice',   pill: 'bg-blue-50 text-blue-600 ring-1 ring-blue-200/60' },
+  Multi: { label: 'Multiple Select', pill: 'bg-amber-50 text-amber-600 ring-1 ring-amber-200/60',   hint: 'Select all that apply' },
+  Match: { label: 'Match Pairs',     pill: 'bg-teal-50 text-teal-600 ring-1 ring-teal-200/60',      hint: 'Match left to right' },
+  Fill:  { label: 'Fill in Blank',   pill: 'bg-violet-50 text-violet-600 ring-1 ring-violet-200/60', hint: 'Type your answer' },
+};
 
-// ── MCQ ───────────────────────────────────────────────────────────────────────
-function McqOptions({ q, answers, onAnswer }: { q: Question; answers: Record<number, AnswerValue>; onAnswer: (id: number, v: AnswerValue) => void }) {
+// ── MCQ ──────────────────────────────────────────────────────────────────────
+function McqOptions({ q, answers, onAnswer }: {
+  q: Question; answers: Record<number, AnswerValue>; onAnswer: (id: number, v: AnswerValue) => void;
+}) {
   const selected = answers[q.id] as number | undefined;
   return (
-    <div className="space-y-3 flex-1">
+    <div className="space-y-2">
       {q.options.map((opt, idx) => {
         const active = selected === idx;
         return (
           <button
             key={opt.id}
             onClick={() => onAnswer(q.id, idx)}
-            className={`w-full text-left px-4 py-3 rounded-xl border transition-all ${
+            className={`group w-full text-left rounded-xl border transition-all duration-150 ${
               active
-                ? 'bg-blue-900/60 border-blue-500 text-blue-100 shadow shadow-blue-900/50'
-                : 'bg-gray-700/40 border-gray-600 text-gray-300 hover:border-gray-400 hover:bg-gray-700/70'
+                ? 'border-blue-300 bg-blue-50/80 shadow-sm shadow-blue-100'
+                : 'border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/30'
             }`}
           >
-            <div className="flex items-center gap-3">
-              <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ${active ? 'border-blue-400 bg-blue-500' : 'border-gray-500'}`}>
+            <div className="flex items-center gap-3.5 px-4 py-3.5">
+              <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-all duration-150 ${
+                active ? 'border-blue-500 bg-blue-500' : 'border-slate-300 group-hover:border-blue-300'
+              }`}>
                 {active && <div className="w-2 h-2 rounded-full bg-white" />}
               </div>
-              <span className="text-sm">
-                <span className="font-semibold mr-2 text-gray-400">{String.fromCharCode(65 + idx)}.</span>
-                {opt.option_text}
-              </span>
+              <div className="flex items-baseline gap-2.5 flex-1">
+                <span className={`text-xs font-bold w-4 shrink-0 ${active ? 'text-blue-500' : 'text-slate-400'}`}>
+                  {String.fromCharCode(65 + idx)}
+                </span>
+                <span className={`text-sm leading-snug ${active ? 'text-blue-900 font-medium' : 'text-slate-700'}`}>
+                  {opt.option_text}
+                </span>
+              </div>
+              {active && (
+                <div className="w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center shrink-0">
+                  <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                  </svg>
+                </div>
+              )}
             </div>
           </button>
         );
@@ -73,43 +86,47 @@ function McqOptions({ q, answers, onAnswer }: { q: Question; answers: Record<num
 }
 
 // ── Multi-select ──────────────────────────────────────────────────────────────
-function MultiOptions({ q, answers, onAnswer }: { q: Question; answers: Record<number, AnswerValue>; onAnswer: (id: number, v: AnswerValue) => void }) {
+function MultiOptions({ q, answers, onAnswer }: {
+  q: Question; answers: Record<number, AnswerValue>; onAnswer: (id: number, v: AnswerValue) => void;
+}) {
   const selected: number[] = (answers[q.id] as number[] | undefined) ?? [];
-
   const toggle = (idx: number) => {
     const next = selected.includes(idx) ? selected.filter(i => i !== idx) : [...selected, idx];
     onAnswer(q.id, next);
   };
 
   return (
-    <div className="space-y-3 flex-1">
-      <p className="text-xs text-yellow-400 bg-yellow-900/30 border border-yellow-700 rounded-lg px-3 py-1.5">
-        Select <strong>all</strong> correct answers
-      </p>
+    <div className="space-y-2">
       {q.options.map((opt, idx) => {
         const active = selected.includes(idx);
         return (
           <button
             key={opt.id}
             onClick={() => toggle(idx)}
-            className={`w-full text-left px-4 py-3 rounded-xl border transition-all ${
+            className={`group w-full text-left rounded-xl border transition-all duration-150 ${
               active
-                ? 'bg-blue-900/60 border-blue-500 text-blue-100'
-                : 'bg-gray-700/40 border-gray-600 text-gray-300 hover:border-gray-400 hover:bg-gray-700/70'
+                ? 'border-blue-300 bg-blue-50/80 shadow-sm shadow-blue-100'
+                : 'border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/30'
             }`}
           >
-            <div className="flex items-center gap-3">
-              <div className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 ${active ? 'border-blue-400 bg-blue-500' : 'border-gray-500'}`}>
+            <div className="flex items-center gap-3.5 px-4 py-3.5">
+              <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-all duration-150 ${
+                active ? 'border-blue-500 bg-blue-500' : 'border-slate-300 group-hover:border-blue-300'
+              }`}>
                 {active && (
-                  <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                  <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                   </svg>
                 )}
               </div>
-              <span className="text-sm">
-                <span className="font-semibold mr-2 text-gray-400">{String.fromCharCode(65 + idx)}.</span>
-                {opt.option_text}
-              </span>
+              <div className="flex items-baseline gap-2.5 flex-1">
+                <span className={`text-xs font-bold w-4 shrink-0 ${active ? 'text-blue-500' : 'text-slate-400'}`}>
+                  {String.fromCharCode(65 + idx)}
+                </span>
+                <span className={`text-sm leading-snug ${active ? 'text-blue-900 font-medium' : 'text-slate-700'}`}>
+                  {opt.option_text}
+                </span>
+              </div>
             </div>
           </button>
         );
@@ -119,36 +136,33 @@ function MultiOptions({ q, answers, onAnswer }: { q: Question; answers: Record<n
 }
 
 // ── Match pairs ───────────────────────────────────────────────────────────────
-function MatchQuestion({ q, answers, onAnswer }: { q: Question; answers: Record<number, AnswerValue>; onAnswer: (id: number, v: AnswerValue) => void }) {
+function MatchQuestion({ q, answers, onAnswer }: {
+  q: Question; answers: Record<number, AnswerValue>; onAnswer: (id: number, v: AnswerValue) => void;
+}) {
   const userMap: Record<number, number> = (answers[q.id] as Record<number, number> | undefined) ?? {};
-
-
-  const selectRight = (leftPairId: number, rightPairId: number) => {
-    const next = { ...userMap, [leftPairId]: rightPairId };
-    onAnswer(q.id, next);
-  };
+  const selectRight = (leftId: number, rightId: number) => onAnswer(q.id, { ...userMap, [leftId]: rightId });
 
   return (
-    <div className="flex-1 space-y-3">
-      <p className="text-xs text-blue-300 bg-blue-900/30 border border-blue-700 rounded-lg px-3 py-1.5">
-        Match each item on the left with the correct item on the right
-      </p>
-      {q.pairs.map(pair => {
+    <div className="space-y-3">
+      {q.pairs.map((pair, pi) => {
         const chosen = userMap[pair.id];
         return (
-          <div key={pair.id} className="bg-gray-800/60 border border-gray-700 rounded-xl p-3">
-            <p className="text-sm text-white font-medium mb-2">{pair.left_text}</p>
-            <div className="flex flex-wrap gap-2">
+          <div key={pair.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
+              <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-600 text-xs font-bold flex items-center justify-center shrink-0">{pi + 1}</span>
+              <p className="text-sm text-slate-800 font-medium">{pair.left_text}</p>
+            </div>
+            <div className="px-4 py-3 flex flex-wrap gap-2">
               {q.pairs.map(r => {
                 const isChosen = chosen === r.id;
                 return (
                   <button
                     key={r.id}
                     onClick={() => selectRight(pair.id, r.id)}
-                    className={`px-3 py-1.5 rounded-lg text-xs border transition-all ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all duration-150 ${
                       isChosen
-                        ? 'bg-blue-700 border-blue-500 text-white'
-                        : 'bg-gray-700 border-gray-600 text-gray-300 hover:border-gray-400'
+                        ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700'
                     }`}
                   >
                     {r.right_text}
@@ -164,31 +178,25 @@ function MatchQuestion({ q, answers, onAnswer }: { q: Question; answers: Record<
 }
 
 // ── Fill in the blank ─────────────────────────────────────────────────────────
-function FillQuestion({ q, answers, onAnswer }: { q: Question; answers: Record<number, AnswerValue>; onAnswer: (id: number, v: AnswerValue) => void }) {
+function FillQuestion({ q, answers, onAnswer }: {
+  q: Question; answers: Record<number, AnswerValue>; onAnswer: (id: number, v: AnswerValue) => void;
+}) {
   const userAnswers: Record<number, string> = (answers[q.id] as Record<number, string> | undefined) ?? {};
-
-  const handleChange = (blankIndex: number, value: string) => {
-    const next = { ...userAnswers, [blankIndex]: value };
-    onAnswer(q.id, next);
-  };
+  const handleChange = (blankIndex: number, value: string) => onAnswer(q.id, { ...userAnswers, [blankIndex]: value });
 
   return (
-    <div className="flex-1 space-y-4">
-      <p className="text-xs text-purple-300 bg-purple-900/30 border border-purple-700 rounded-lg px-3 py-1.5">
-        Type your answer for each blank
-      </p>
+    <div className="space-y-3">
       {q.blanks.map(blank => (
-        <div key={blank.blank_index}>
-          <label className="text-xs text-gray-400 font-medium block mb-1">
-            Blank {blank.blank_index + 1}
-          </label>
+        <div key={blank.blank_index} className="bg-white border border-slate-200 rounded-xl overflow-hidden focus-within:border-blue-300 focus-within:ring-1 focus-within:ring-blue-300 transition-all">
+          <div className="px-4 py-2 bg-slate-50 border-b border-slate-200">
+            <label className="text-xs text-slate-500 font-semibold">Blank {blank.blank_index + 1}</label>
+          </div>
           <input
             type="text"
             value={userAnswers[blank.blank_index] ?? ''}
             onChange={e => handleChange(blank.blank_index, e.target.value)}
-            placeholder="Type your answer…"
-            className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-white
-                       placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+            placeholder="Type your answer here…"
+            className="w-full px-4 py-3 text-sm text-slate-800 placeholder-slate-400 outline-none bg-white"
           />
         </div>
       ))}
@@ -196,129 +204,132 @@ function FillQuestion({ q, answers, onAnswer }: { q: Question; answers: Record<n
   );
 }
 
-// ── Type badge ────────────────────────────────────────────────────────────────
-const TYPE_LABELS: Record<string, { label: string; color: string }> = {
-  MCQ:   { label: 'Single Choice',   color: 'bg-blue-900/40 text-blue-400' },
-  Multi: { label: 'Multi-Select',    color: 'bg-yellow-900/40 text-yellow-400' },
-  Match: { label: 'Match the Pairs', color: 'bg-teal-900/40 text-teal-400' },
-  Fill:  { label: 'Fill in Blank',   color: 'bg-purple-900/40 text-purple-400' },
-};
-
-// ── Main panel ────────────────────────────────────────────────────────────────
+// ── Main export ───────────────────────────────────────────────────────────────
 export default function QuestionPanel({
   exam, currentIndex, answers, markedForReview,
-  onAnswer, onToggleMark, onNavigate, onPrev, onNext, onSubmit,
+  onAnswer, onToggleMark, onPrev, onNext, onSubmit,
 }: QuestionPanelProps) {
-  const q = exam.questions[currentIndex];
-  const answered   = exam.questions.filter(qn => isAnswered(qn, answers)).length;
-  const marked     = markedForReview.size;
-  const unanswered = exam.questions.length - answered;
-  const typeInfo   = TYPE_LABELS[q.qtype] ?? TYPE_LABELS.MCQ;
+  const q          = exam.questions[currentIndex];
+  const total      = exam.questions.length;
+  const typeMeta   = TYPE_META[q.qtype] ?? TYPE_META.MCQ;
+  const isLast     = currentIndex === total - 1;
+  const currentAnswered = isAnswered(q, answers);
+  const isFlagged  = markedForReview.has(q.id);
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Legend */}
-      <div className="flex items-center gap-4 mb-4 text-xs text-gray-400 flex-wrap">
-        <div className="flex items-center gap-1.5">
-          <div className="w-3 h-3 rounded bg-green-900 border border-green-600" />
-          <span>Answered ({answered})</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-3 h-3 rounded bg-gray-800 border border-gray-600" />
-          <span>Not Answered ({unanswered})</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-3 h-3 rounded bg-purple-900 border border-purple-600" />
-          <span>Review ({marked})</span>
-        </div>
-      </div>
+    <div className="flex flex-col h-full max-w-3xl mx-auto w-full">
+      <div className="flex-1 bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
 
-      {/* Question navigation grid */}
-      <div className="bg-gray-800/50 rounded-xl border border-gray-700 p-3 mb-4">
-        <div className="flex flex-wrap gap-2">
-          {exam.questions.map((question, i) => (
+        {/* Card header */}
+        <div className="px-6 pt-5 pb-4 border-b border-slate-100">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h2 className="text-lg font-semibold text-slate-900 leading-snug">
+                Question {currentIndex + 1}: {q.skill || q.category}
+              </h2>
+              <div className="flex items-center gap-2 flex-wrap mt-2">
+                <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-full ${typeMeta.pill}`}>
+                  {typeMeta.label}
+                </span>
+                <span className="text-[11px] font-medium px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">
+                  {q.category}
+                </span>
+                {q.level && (
+                  <span className="text-[11px] px-2.5 py-1 rounded-full bg-slate-50 text-slate-400 ring-1 ring-slate-200">
+                    {q.level}
+                  </span>
+                )}
+              </div>
+            </div>
+
             <button
-              key={question.id}
-              onClick={() => onNavigate(i)}
-              className={navStyle(question, i, currentIndex, answers, markedForReview)}
+              onClick={() => onToggleMark(q.id)}
+              className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium border transition-all duration-150 shrink-0 ${
+                isFlagged
+                  ? 'bg-rose-50 text-rose-600 border-rose-200'
+                  : 'bg-white text-slate-500 border-slate-200 hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50'
+              }`}
             >
-              {i + 1}
+              <svg className="w-3.5 h-3.5" fill={isFlagged ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 3v18M3 4.5h13.5l-2.25 4.5 2.25 4.5H3" />
+              </svg>
+              {isFlagged ? 'Flagged' : 'Flag for Review'}
             </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Current question card */}
-      <div className="flex-1 bg-gray-800/50 rounded-xl border border-gray-700 p-5 flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className={`text-xs font-medium px-2 py-0.5 rounded ${typeInfo.color}`}>
-              {typeInfo.label}
-            </span>
-            <span className="text-xs text-blue-400 font-medium bg-blue-900/40 px-2 py-0.5 rounded">
-              {q.category}
-            </span>
-            {q.level && (
-              <span className="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded border border-gray-700">
-                {q.level}
-              </span>
-            )}
-            <span className="text-xs text-gray-500">
-              Q {currentIndex + 1} / {exam.questions.length}
-            </span>
           </div>
-          <button
-            onClick={() => onToggleMark(q.id)}
-            className={`text-xs px-3 py-1 rounded-lg border transition-colors ${
-              markedForReview.has(q.id)
-                ? 'bg-purple-900 border-purple-600 text-purple-300'
-                : 'bg-gray-700 border-gray-600 text-gray-400 hover:border-purple-600 hover:text-purple-400'
-            }`}
-          >
-            {markedForReview.has(q.id) ? '★ Marked' : '☆ Mark for Review'}
-          </button>
+
+          {typeMeta.hint && (
+            <p className="text-xs text-slate-400 mt-2.5 flex items-center gap-1.5">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+              </svg>
+              {typeMeta.hint}
+            </p>
+          )}
         </div>
 
-        {/* Question stem */}
-        <p className="text-gray-100 text-base leading-relaxed mb-5 font-medium">
-          {q.text}
-        </p>
+        {/* Question text + answers */}
+        <div className="flex-1 px-6 py-5 overflow-y-auto space-y-5">
+          <p className="text-slate-800 text-[15px] leading-relaxed font-medium">
+            {q.text}
+          </p>
 
-        {/* Answer UI per type */}
-        {q.qtype === 'MCQ'   && <McqOptions   q={q} answers={answers} onAnswer={onAnswer} />}
-        {q.qtype === 'Multi' && <MultiOptions q={q} answers={answers} onAnswer={onAnswer} />}
-        {q.qtype === 'Match' && <MatchQuestion q={q} answers={answers} onAnswer={onAnswer} />}
-        {q.qtype === 'Fill'  && <FillQuestion  q={q} answers={answers} onAnswer={onAnswer} />}
+          {q.qtype === 'MCQ'   && <McqOptions   q={q} answers={answers} onAnswer={onAnswer} />}
+          {q.qtype === 'Multi' && <MultiOptions  q={q} answers={answers} onAnswer={onAnswer} />}
+          {q.qtype === 'Match' && <MatchQuestion q={q} answers={answers} onAnswer={onAnswer} />}
+          {q.qtype === 'Fill'  && <FillQuestion  q={q} answers={answers} onAnswer={onAnswer} />}
+        </div>
 
-        {/* Navigation */}
-        <div className="flex items-center justify-between mt-5 pt-4 border-t border-gray-700">
+        {/* Footer nav */}
+        <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between gap-3 bg-slate-50/50">
           <button
             onClick={onPrev}
             disabled={currentIndex === 0}
-            className="px-4 py-2 text-sm bg-gray-700 border border-gray-600 text-gray-300 rounded-lg
-                       hover:border-gray-400 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            className="flex items-center gap-2 px-4 py-2 text-sm text-slate-600 bg-white border border-slate-200 rounded-xl
+                       hover:border-slate-300 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150 font-medium"
           >
-            ← Previous
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+            </svg>
+            Previous
           </button>
 
-          <div className="flex gap-2">
-            {currentIndex < exam.questions.length - 1 ? (
-              <button
-                onClick={onNext}
-                className="px-4 py-2 text-sm bg-blue-700 border border-blue-500 text-white rounded-lg hover:bg-blue-600 transition-all"
-              >
-                Next →
-              </button>
-            ) : (
-              <button
-                onClick={onSubmit}
-                className="px-6 py-2 text-sm bg-green-700 border border-green-500 text-white rounded-lg hover:bg-green-600 transition-all font-semibold"
-              >
-                Submit Exam
-              </button>
+          <div className="flex items-center gap-2">
+            {currentAnswered && (
+              <span className="flex items-center gap-1 text-xs text-emerald-600 font-medium">
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                </svg>
+                Answered
+              </span>
             )}
+            <span className="text-xs text-slate-400 font-medium">
+              {currentIndex + 1} / {total}
+            </span>
           </div>
+
+          {isLast ? (
+            <button
+              onClick={onSubmit}
+              className="flex items-center gap-2 px-5 py-2 text-sm text-white bg-emerald-600 hover:bg-emerald-700
+                         rounded-xl transition-all duration-150 font-semibold shadow-sm shadow-emerald-200"
+            >
+              Submit Exam
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+              </svg>
+            </button>
+          ) : (
+            <button
+              onClick={onNext}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700
+                         rounded-xl transition-all duration-150 font-medium shadow-sm shadow-blue-200"
+            >
+              Next
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+              </svg>
+            </button>
+          )}
         </div>
       </div>
     </div>

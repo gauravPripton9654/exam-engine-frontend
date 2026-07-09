@@ -6,14 +6,17 @@ import { Violation, ViolationType, VIOLATION_CONFIG, PeriodicSnapshot } from '@/
 interface UseProctorOptions {
   enabled: boolean;
   onNewViolation?: (v: Violation) => void;
+  screenStream: MediaStream | null;
 }
 
 export interface ProctorState {
   isReady: boolean;
   isFullscreen: boolean;
+  isWindowFocused: boolean;
   violations: Violation[];
   periodicSnapshots: PeriodicSnapshot[];
   cameraError: string | null;
+  cameraStream: MediaStream | null;
 }
 
 const SNAPSHOT_INTERVAL_MS = 2 * 60 * 1000;  // 2 minutes
@@ -21,13 +24,15 @@ const MOUSE_INACTIVE_MS    = 3 * 60 * 1000;  // 3 minutes with no mouse movement
 const BOT_CHECK_MS         = 30 * 1000;       // analyze mouse pattern every 30s
 const MIN_BOT_SPEEDS       = 20;              // minimum velocity samples needed for bot check
 
-export function useProctor({ enabled, onNewViolation }: UseProctorOptions) {
+export function useProctor({ enabled, onNewViolation, screenStream }: UseProctorOptions) {
   const [state, setState] = useState<ProctorState>({
     isReady:           false,
     isFullscreen:      false,
+    isWindowFocused:   true,
     violations:        [],
     periodicSnapshots: [],
     cameraError:       null,
+    cameraStream:      null,
   });
 
   const cooldownRef       = useRef<Partial<Record<ViolationType, number>>>({});
@@ -62,7 +67,12 @@ export function useProctor({ enabled, onNewViolation }: UseProctorOptions) {
 
     // Sync fullscreen state immediately — the fullscreenchange event may have fired
     // before this effect registered its listener (race condition on exam start).
-    setState(prev => ({ ...prev, isReady: true, isFullscreen: !!document.fullscreenElement }));
+    setState(prev => ({
+      ...prev,
+      isReady:         true,
+      isFullscreen:    !!document.fullscreenElement,
+      isWindowFocused: document.hasFocus(),
+    }));
 
     // Inactivity timer starts from exam start, not from page load.
     lastMouseMoveRef.current = Date.now();
@@ -83,8 +93,14 @@ export function useProctor({ enabled, onNewViolation }: UseProctorOptions) {
       }
     };
 
-    const onBlur    = () => addViolation('WINDOW_BLUR', 'Candidate switched to another application');
-    const onFocus   = () => reenterFullscreen();
+    const onBlur = () => {
+      setState(prev => ({ ...prev, isWindowFocused: false }));
+      addViolation('WINDOW_BLUR', 'Candidate switched to another application or started screen sharing');
+    };
+    const onFocus = () => {
+      setState(prev => ({ ...prev, isWindowFocused: true }));
+      reenterFullscreen();
+    };
 
     const onFsChange = () => {
       const inFs = !!document.fullscreenElement;
@@ -199,6 +215,40 @@ export function useProctor({ enabled, onNewViolation }: UseProctorOptions) {
       }
     };
 
+    // ── Monitor the required screen-share stream ────────────────────────────────
+    // If the candidate stops sharing (track ends), treat it as a violation and
+    // hide the exam content by marking the window as unfocused.
+    let screenTrackCleanup: (() => void) | null = null;
+    if (screenStream) {
+      const track = screenStream.getVideoTracks()[0];
+      if (track) {
+        const onScreenEnded = () => {
+          addViolation('SCREEN_SHARE_ATTEMPT', 'Screen monitoring was stopped by the candidate');
+          setState(prev => ({ ...prev, isWindowFocused: false }));
+        };
+        track.addEventListener('ended', onScreenEnded);
+        screenTrackCleanup = () => track.removeEventListener('ended', onScreenEnded);
+      }
+    }
+
+    // ── Block getDisplayMedia (screen sharing) from this page ──────────────────
+    // Catches Chrome extensions or injected scripts that try to capture the
+    // screen from within the exam tab. Meet/Zoom in OTHER tabs can't be blocked
+    // this way, but the tab-switch / window-blur listeners above catch the
+    // moment the user leaves to set up external screen sharing.
+    const origGetDisplayMedia = navigator.mediaDevices.getDisplayMedia?.bind(navigator.mediaDevices);
+    if (origGetDisplayMedia) {
+      (navigator.mediaDevices as MediaDevices & { getDisplayMedia: typeof origGetDisplayMedia }).getDisplayMedia =
+        async (...args: Parameters<typeof origGetDisplayMedia>) => {
+          addViolation('SCREEN_SHARE_ATTEMPT', 'Screen sharing attempt detected and blocked');
+          void args; // satisfies TS without unreachable code
+          throw new DOMException(
+            'Screen sharing is not permitted during this exam.',
+            'NotAllowedError'
+          );
+        };
+    }
+
     // ── Register everything ─────────────────────────────────────────────────────
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('blur',               onBlur);
@@ -225,6 +275,7 @@ export function useProctor({ enabled, onNewViolation }: UseProctorOptions) {
       .getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false })
       .then(stream => {
         streamRef.current = stream;
+        setState(prev => ({ ...prev, cameraStream: stream }));
         const video = document.createElement('video');
         video.muted       = true;
         video.playsInline = true;
@@ -280,9 +331,15 @@ export function useProctor({ enabled, onNewViolation }: UseProctorOptions) {
       clearInterval(inactivityInterval);
       clearInterval(botInterval);
       if (snapshotInterval) clearInterval(snapshotInterval);
+      screenTrackCleanup?.();
+      // Restore original getDisplayMedia on exam end
+      if (origGetDisplayMedia) {
+        (navigator.mediaDevices as MediaDevices & { getDisplayMedia: typeof origGetDisplayMedia }).getDisplayMedia =
+          origGetDisplayMedia;
+      }
       streamRef.current?.getTracks().forEach(t => t.stop());
       hiddenVideoRef.current = null;
-      setState(prev => ({ ...prev, isReady: false, isFullscreen: false }));
+      setState(prev => ({ ...prev, isReady: false, isFullscreen: false, cameraStream: null }));
     };
   }, [enabled, addViolation]);
 

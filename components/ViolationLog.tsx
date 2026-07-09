@@ -7,87 +7,84 @@ interface ViolationLogProps {
   violations: Violation[];
 }
 
-const SEVERITY_BADGE: Record<string, string> = {
-  low:    'bg-yellow-900 text-yellow-300 border border-yellow-700',
-  medium: 'bg-orange-900 text-orange-300 border border-orange-700',
-  high:   'bg-red-900 text-red-300 border border-red-700',
+const SEV: Record<string, { dot: string; badge: string; row: string }> = {
+  low:    { dot: 'bg-amber-400',  badge: 'bg-amber-50 text-amber-700 ring-1 ring-amber-200',   row: '' },
+  medium: { dot: 'bg-orange-500', badge: 'bg-orange-50 text-orange-700 ring-1 ring-orange-200', row: '' },
+  high:   { dot: 'bg-rose-500',   badge: 'bg-rose-50 text-rose-700 ring-1 ring-rose-200',       row: '' },
 };
 
 export default function ViolationLog({ violations }: ViolationLogProps) {
-  const [selectedViolation, setSelectedViolation] = useState<Violation | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
 
-  const high   = violations.filter(v => v.severity === 'high').length;
-  const medium = violations.filter(v => v.severity === 'medium').length;
-  const low    = violations.filter(v => v.severity === 'low').length;
+  const formatTime = (d: Date) =>
+    new Date(d).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-  const formatTime = (date: Date) =>
-    new Date(date).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  if (violations.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-10 text-center">
+        <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center mb-3">
+          <svg className="w-5 h-5 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <p className="text-emerald-700 text-xs font-semibold">No violations</p>
+        <p className="text-slate-400 text-[11px] mt-1">All checks passing</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex flex-col h-full bg-gray-900 rounded-xl border border-gray-700">
-      {/* Header */}
-      <div className="p-3 border-b border-gray-700">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-semibold text-gray-200">Violation Log</h3>
-          <span className="text-xs text-gray-400">{violations.length} total</span>
-        </div>
-        <div className="flex gap-2">
-          <span className={`text-xs px-2 py-0.5 rounded-full ${SEVERITY_BADGE.high}`}>H: {high}</span>
-          <span className={`text-xs px-2 py-0.5 rounded-full ${SEVERITY_BADGE.medium}`}>M: {medium}</span>
-          <span className={`text-xs px-2 py-0.5 rounded-full ${SEVERITY_BADGE.low}`}>L: {low}</span>
-        </div>
-      </div>
+    <div className="space-y-1.5">
+      {violations.map((v, idx) => {
+        const s      = SEV[v.severity] ?? SEV.low;
+        const isOpen = open === v.id;
+        const label  = VIOLATION_CONFIG[v.type].label;
 
-      {/* List */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
-        {violations.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center py-6">
-            <div className="text-green-400 text-3xl mb-2">✓</div>
-            <p className="text-green-400 text-sm font-medium">No violations</p>
-            <p className="text-gray-500 text-xs mt-1">All monitoring checks passed</p>
-          </div>
-        ) : (
-          violations.map(v => (
-            <button
-              key={v.id}
-              onClick={() => setSelectedViolation(selectedViolation?.id === v.id ? null : v)}
-              className="w-full text-left"
-            >
-              <div className={`rounded-lg p-2.5 border transition-all ${
-                selectedViolation?.id === v.id
-                  ? 'border-blue-500 bg-blue-950/50'
-                  : 'border-gray-700 bg-gray-800 hover:border-gray-600'
-              }`}>
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <span className={`text-xs px-1.5 py-0.5 rounded font-medium shrink-0 ${SEVERITY_BADGE[v.severity]}`}>
-                      {v.severity.toUpperCase()[0]}
-                    </span>
-                    <span className="text-xs text-gray-200 truncate">
-                      {VIOLATION_CONFIG[v.type].label}
-                    </span>
-                  </div>
-                  <span className="text-xs text-gray-500 shrink-0">{formatTime(v.timestamp)}</span>
+        return (
+          <button
+            key={v.id}
+            onClick={() => setOpen(isOpen ? null : v.id)}
+            className="w-full text-left"
+          >
+            <div className={`rounded-xl border transition-all duration-150 overflow-hidden ${
+              isOpen
+                ? 'border-indigo-200 bg-indigo-50/50'
+                : 'border-slate-100 bg-white hover:border-slate-200 hover:bg-slate-50/50'
+            }`}>
+              {/* Row */}
+              <div className="flex items-center gap-2.5 px-3 py-2.5">
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-[10px] text-slate-400 font-semibold w-4 text-right">{idx + 1}</span>
+                  <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.dot}`} />
                 </div>
-                <p className="text-xs text-gray-400 mt-1 line-clamp-1">{v.description}</p>
-
-                {/* Expanded view */}
-                {selectedViolation?.id === v.id && v.screenshot && (
-                  <div className="mt-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={v.screenshot}
-                      alt="Screenshot"
-                      className="w-full rounded border border-gray-600 mt-1"
-                      style={{ maxHeight: 100, objectFit: 'cover' }}
-                    />
-                  </div>
-                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-slate-700 font-medium truncate">{label}</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5 truncate">{v.description}</p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-md ${s.badge}`}>
+                    {v.severity[0].toUpperCase()}
+                  </span>
+                  <span className="text-[10px] text-slate-400">{formatTime(v.timestamp)}</span>
+                </div>
               </div>
-            </button>
-          ))
-        )}
-      </div>
+
+              {/* Expanded screenshot */}
+              {isOpen && v.screenshot && (
+                <div className="px-3 pb-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={v.screenshot}
+                    alt="Violation screenshot"
+                    className="w-full rounded-lg border border-slate-200 object-cover"
+                    style={{ maxHeight: 96 }}
+                  />
+                </div>
+              )}
+            </div>
+          </button>
+        );
+      })}
     </div>
   );
 }

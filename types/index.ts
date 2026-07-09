@@ -12,7 +12,8 @@ export type ViolationType =
   | 'DEVTOOLS_OPEN'
   | 'MOUSE_INACTIVE'
   | 'SUSPICIOUS_MOUSE'
-  | 'EXTRA_MONITOR';
+  | 'EXTRA_MONITOR'
+  | 'SCREEN_SHARE_ATTEMPT';
 
 export const VIOLATION_CONFIG: Record<
   ViolationType,
@@ -22,7 +23,7 @@ export const VIOLATION_CONFIG: Record<
   MULTIPLE_FACES:    { label: 'Multiple Faces',     severity: 'high',   cooldown: 5000   },
   NO_FACE:           { label: 'No Face Detected',   severity: 'medium', cooldown: 10000  },
   PHONE_DETECTED:    { label: 'Phone Detected',     severity: 'high',   cooldown: 6000   },
-  WINDOW_BLUR:       { label: 'Window Changed',     severity: 'medium', cooldown: 8000   },
+  WINDOW_BLUR:       { label: 'Window Changed',     severity: 'high',   cooldown: 3000   },
   COPY_ATTEMPT:      { label: 'Copy Attempt',       severity: 'medium', cooldown: 3000   },
   PASTE_ATTEMPT:     { label: 'Paste Attempt',      severity: 'medium', cooldown: 3000   },
   FULLSCREEN_EXIT:   { label: 'Exited Fullscreen',  severity: 'high',   cooldown: 5000   },
@@ -31,7 +32,8 @@ export const VIOLATION_CONFIG: Record<
   DEVTOOLS_OPEN:     { label: 'DevTools Detected',  severity: 'high',   cooldown: 30000  },
   MOUSE_INACTIVE:    { label: 'Mouse Inactive',     severity: 'medium', cooldown: 180000 },
   SUSPICIOUS_MOUSE:  { label: 'Suspicious Mouse',   severity: 'medium', cooldown: 60000  },
-  EXTRA_MONITOR:     { label: 'Extra Monitor',      severity: 'high',   cooldown: 30000  },
+  EXTRA_MONITOR:        { label: 'Extra Monitor',       severity: 'high',   cooldown: 30000  },
+  SCREEN_SHARE_ATTEMPT: { label: 'Screen Share Blocked', severity: 'high',   cooldown: 5000   },
 };
 
 export interface Violation {

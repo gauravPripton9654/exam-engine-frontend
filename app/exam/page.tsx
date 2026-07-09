@@ -9,16 +9,17 @@ import { CandidateInfo, ExamConfig, ApiQuestion, Question } from '@/types';
 const ExamInterface = dynamic(() => import('@/components/ExamInterface'), {
   ssr: false,
   loading: () => (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center">
       <div className="text-center">
-        <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-        <p className="text-gray-400">Loading exam…</p>
+        <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+        <p className="text-slate-500 text-sm">Loading exam…</p>
       </div>
     </div>
   ),
 });
 
 type CameraStatus  = 'idle' | 'checking' | 'granted' | 'denied';
+type ScreenStatus  = 'idle' | 'checking' | 'granted' | 'denied' | 'wrong_surface';
 type MonitorStatus = 'unchecked' | 'ok' | 'extra_detected';
 
 function toRuntimeQuestion(q: ApiQuestion): Question {
@@ -30,9 +31,31 @@ function toRuntimeQuestion(q: ApiQuestion): Question {
     skill: q.skill,
     level: q.level,
     options: [...q.mcq_options].sort((a, b) => a.sort_order - b.sort_order),
-    pairs: [...q.match_pairs].sort((a, b) => a.sort_order - b.sort_order),
-    blanks: [...q.fill_blanks].sort((a, b) => a.sort_order - b.sort_order),
+    pairs:   [...q.match_pairs].sort((a, b) => a.sort_order - b.sort_order),
+    blanks:  [...q.fill_blanks].sort((a, b) => a.sort_order - b.sort_order),
   };
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+    </svg>
+  );
+}
+
+function StepHeader({ step, done, label }: { step: number; done: boolean; label: string }) {
+  return (
+    <div className="flex items-center gap-3 mb-3">
+      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 transition-all ${
+        done ? 'bg-emerald-500 text-white' : 'bg-indigo-100 text-indigo-700'
+      }`}>
+        {done ? <CheckIcon className="w-3.5 h-3.5" /> : step}
+      </div>
+      <p className="text-sm font-semibold text-slate-700">{label}</p>
+      {done && <span className="text-xs text-emerald-600 font-medium">Complete</span>}
+    </div>
+  );
 }
 
 function ExamPageContent() {
@@ -44,7 +67,9 @@ function ExamPageContent() {
   const [loadingExam, setLoadingExam]     = useState(true);
   const [examError, setExamError]         = useState<string | null>(null);
   const [started, setStarted]             = useState(false);
+
   const [cameraStatus, setCameraStatus]   = useState<CameraStatus>('idle');
+  const [screenStatus, setScreenStatus]   = useState<ScreenStatus>('idle');
   const [isMobile, setIsMobile]           = useState(false);
   const [monitorStatus, setMonitorStatus] = useState<MonitorStatus>('unchecked');
   const [declarations, setDeclarations]   = useState({
@@ -54,6 +79,7 @@ function ExamPageContent() {
 
   const previewVideoRef  = useRef<HTMLVideoElement>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef  = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     const ua = navigator.userAgent;
@@ -61,16 +87,12 @@ function ExamPageContent() {
     setIsMobile(mobileUA || window.innerWidth < 1024);
   }, []);
 
-  // Parse candidate info and load curriculum + questions
   useEffect(() => {
     const name         = searchParams.get('name');
     const email        = searchParams.get('email') ?? '';
     const curriculumId = searchParams.get('curriculumId');
-
     if (!name || !curriculumId) { router.push('/'); return; }
-
     setCandidate({ name, id: curriculumId, email });
-
     const id = Number(curriculumId);
     Promise.all([fetchCurriculum(id), fetchQuestions(id)])
       .then(([curriculum, apiQuestions]) => {
@@ -90,7 +112,10 @@ function ExamPageContent() {
   }, [searchParams, router]);
 
   useEffect(() => {
-    return () => { previewStreamRef.current?.getTracks().forEach(t => t.stop()); };
+    return () => {
+      previewStreamRef.current?.getTracks().forEach(t => t.stop());
+      screenStreamRef.current?.getTracks().forEach(t => t.stop());
+    };
   }, []);
 
   const requestCamera = async () => {
@@ -108,6 +133,31 @@ function ExamPageContent() {
     }
   };
 
+  const requestScreenAccess = async () => {
+    setScreenStatus('checking');
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { displaySurface: 'monitor' } as MediaTrackConstraints,
+        audio: false,
+      });
+      const track    = stream.getVideoTracks()[0];
+      const surface  = (track.getSettings() as MediaTrackSettings & { displaySurface?: string }).displaySurface;
+      if (surface && surface !== 'monitor') {
+        stream.getTracks().forEach(t => t.stop());
+        setScreenStatus('wrong_surface');
+        return;
+      }
+      screenStreamRef.current = stream;
+      track.addEventListener('ended', () => {
+        screenStreamRef.current = null;
+        setScreenStatus('denied');
+      });
+      setScreenStatus('granted');
+    } catch {
+      setScreenStatus('denied');
+    }
+  };
+
   const runMonitorCheck = useCallback(() => {
     const extended = ('isExtended' in window.screen)
       ? (window.screen as typeof window.screen & { isExtended: boolean }).isExtended === true
@@ -116,15 +166,18 @@ function ExamPageContent() {
   }, []);
 
   useEffect(() => {
-    if (cameraStatus === 'granted') runMonitorCheck();
-  }, [cameraStatus, runMonitorCheck]);
+    if (screenStatus === 'granted') runMonitorCheck();
+  }, [screenStatus, runMonitorCheck]);
 
   const systemCheckPassed =
     monitorStatus === 'ok' &&
     declarations.noExternalKeyboard &&
     declarations.noBackgroundApps;
 
-  const canStart = cameraStatus === 'granted' && systemCheckPassed;
+  const canStart =
+    cameraStatus === 'granted' &&
+    screenStatus === 'granted' &&
+    systemCheckPassed;
 
   const handleStart = () => {
     previewStreamRef.current?.getTracks().forEach(t => t.stop());
@@ -137,11 +190,15 @@ function ExamPageContent() {
 
   if (isMobile) {
     return (
-      <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center p-8 text-center">
-        <div className="text-7xl mb-6">💻</div>
-        <h1 className="text-2xl font-bold text-white mb-3">Desktop Required</h1>
-        <p className="text-gray-400 text-sm max-w-xs">
-          This exam must be taken on a <span className="text-white font-medium">laptop or desktop computer</span>.
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-8 text-center">
+        <div className="w-14 h-14 bg-indigo-100 rounded-2xl flex items-center justify-center mb-6">
+          <svg className="w-7 h-7 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25m18 0A2.25 2.25 0 0018.75 3H5.25A2.25 2.25 0 003 5.25m18 0H3" />
+          </svg>
+        </div>
+        <h1 className="text-2xl font-semibold text-slate-900 mb-2">Desktop Required</h1>
+        <p className="text-slate-500 text-sm max-w-xs leading-relaxed">
+          This exam must be taken on a laptop or desktop computer. Mobile devices are not supported.
         </p>
       </div>
     );
@@ -149,173 +206,263 @@ function ExamPageContent() {
 
   if (loadingExam) {
     return (
-      <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center gap-4">
-        <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-        <p className="text-gray-400 text-sm">Loading exam questions…</p>
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-3">
+        <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+        <p className="text-slate-400 text-sm">Loading exam questions…</p>
       </div>
     );
   }
 
   if (examError || !examConfig || !candidate) {
     return (
-      <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center gap-4 p-6 text-center">
-        <div className="text-5xl">⚠️</div>
-        <p className="text-red-400 font-medium">{examError ?? 'Something went wrong.'}</p>
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-4 p-6 text-center">
+        <div className="w-12 h-12 bg-rose-50 rounded-2xl flex items-center justify-center">
+          <svg className="w-6 h-6 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+          </svg>
+        </div>
+        <p className="text-slate-700 font-medium text-sm">{examError ?? 'Something went wrong.'}</p>
         <button
           onClick={() => router.push('/')}
-          className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-semibold transition-colors"
+          className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition-colors"
         >
-          ← Go Back
+          Go Back
         </button>
       </div>
     );
   }
 
-  if (started) return <ExamInterface candidate={candidate} exam={examConfig} />;
+  if (started) {
+    return (
+      <ExamInterface
+        candidate={candidate}
+        exam={examConfig}
+        screenStream={screenStreamRef.current}
+      />
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center p-6">
-      <div className="w-full max-w-xl bg-gray-900 rounded-2xl border border-gray-700 p-8">
-        <div className="text-center mb-6">
-          <div className="text-5xl mb-4">📋</div>
-          <h2 className="text-xl font-bold text-white">{examConfig.name}</h2>
-          <p className="text-gray-400 mt-1 text-sm">Welcome, {candidate.name}</p>
+    <div className="min-h-screen bg-slate-50">
+      {/* Topbar */}
+      <header className="border-b border-slate-200 bg-white">
+        <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 bg-indigo-600 rounded-lg flex items-center justify-center">
+              <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+              </svg>
+            </div>
+            <span className="font-semibold text-slate-900 text-sm tracking-tight">Pripton</span>
+          </div>
+          <span className="text-xs text-slate-400">Pre-exam Setup</span>
+        </div>
+      </header>
+
+      <main className="max-w-xl mx-auto px-6 py-10">
+        {/* Exam title */}
+        <div className="mb-8">
+          <p className="text-xs text-indigo-600 font-semibold uppercase tracking-wider mb-1">Assessment</p>
+          <h1 className="text-xl font-semibold text-slate-900">{examConfig.name}</h1>
+          <p className="text-slate-500 text-sm mt-1">Welcome, {candidate.name}</p>
         </div>
 
-        {/* Exam details */}
-        <div className="space-y-2 mb-6">
-          {[
-            ['Questions',      `${examConfig.questions.length}`],
-            ['Duration',       `${examConfig.duration / 60} minutes`],
-            ['Max Violations', `${examConfig.maxViolations} — exam auto-submits after this`],
-          ].map(([label, value]) => (
-            <div key={label} className="flex justify-between py-2 border-b border-gray-700">
-              <span className="text-gray-400 text-sm">{label}</span>
-              <span className="text-white text-sm font-medium">{value}</span>
-            </div>
-          ))}
+        {/* Exam meta */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 mb-6">
+          <div className="grid grid-cols-3 divide-x divide-slate-100">
+            {[
+              { label: 'Questions', value: String(examConfig.questions.length) },
+              { label: 'Duration', value: `${examConfig.duration / 60} min` },
+              { label: 'Max Violations', value: String(examConfig.maxViolations) },
+            ].map(({ label, value }) => (
+              <div key={label} className="text-center px-4 first:pl-0 last:pr-0">
+                <p className="text-lg font-semibold text-slate-900">{value}</p>
+                <p className="text-xs text-slate-400 mt-0.5">{label}</p>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Step 1: Camera */}
-        <div className="mb-5">
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-4">
           <StepHeader step={1} done={cameraStatus === 'granted'} label="Camera Access" />
 
           {cameraStatus === 'idle' && (
-            <div className="bg-gray-800 border border-gray-600 rounded-xl p-4">
-              <p className="text-gray-400 text-xs mb-3">
-                Camera access is <span className="text-white font-medium">required</span> to start.
-                A snapshot is taken every 2 minutes for proctoring.
+            <div>
+              <p className="text-slate-500 text-xs mb-3 leading-relaxed">
+                Camera access is required. A snapshot is taken every 2 minutes to verify your identity.
               </p>
-              <button
-                onClick={requestCamera}
-                className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-semibold transition-colors"
-              >
-                Grant Camera Access
+              <button onClick={requestCamera}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition-colors">
+                Enable Camera
               </button>
             </div>
           )}
 
           {cameraStatus === 'checking' && (
-            <div className="bg-gray-800 border border-gray-600 rounded-xl p-4 flex items-center gap-3">
-              <div className="w-5 h-5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin shrink-0" />
-              <p className="text-gray-300 text-sm">Requesting camera access…</p>
+            <div className="flex items-center gap-3 py-1">
+              <div className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin shrink-0" />
+              <p className="text-slate-500 text-sm">Requesting camera access…</p>
             </div>
           )}
 
           {cameraStatus === 'granted' && (
-            <div className="bg-gray-800 border border-green-700 rounded-xl overflow-hidden">
-              <div className="relative bg-black" style={{ aspectRatio: '16/9' }}>
-                <video
-                  ref={previewVideoRef}
-                  muted playsInline autoPlay
-                  className="w-full h-full object-cover"
-                  style={{ transform: 'scaleX(-1)' }}
-                />
-                <div className="absolute top-2 left-2 flex items-center gap-1.5 bg-black/60 rounded-full px-2 py-1">
-                  <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                  <span className="text-white text-[10px] font-medium">Camera Ready</span>
+            <div className="rounded-xl overflow-hidden border border-slate-200">
+              <div className="relative bg-slate-900" style={{ aspectRatio: '16/9' }}>
+                <video ref={previewVideoRef} muted playsInline autoPlay
+                  className="w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
+                <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 bg-black/50 backdrop-blur-sm rounded-full px-2.5 py-1">
+                  <div className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" />
+                  <span className="text-white text-[10px] font-medium">Live Preview</span>
                 </div>
               </div>
-              <div className="px-3 py-2">
-                <p className="text-green-400 text-xs font-medium">✓ Camera access granted</p>
+              <div className="px-3 py-2 flex items-center gap-2">
+                <div className="w-4 h-4 bg-emerald-100 rounded-full flex items-center justify-center">
+                  <CheckIcon className="w-2.5 h-2.5 text-emerald-600" />
+                </div>
+                <p className="text-emerald-700 text-xs font-medium">Camera access granted</p>
               </div>
             </div>
           )}
 
           {cameraStatus === 'denied' && (
-            <div className="bg-red-900/20 border border-red-700 rounded-xl p-4">
-              <p className="text-red-400 text-sm font-semibold mb-1">Camera Access Denied</p>
-              <p className="text-red-300/70 text-xs mb-3">
-                Allow camera access in your browser settings and try again.
-              </p>
-              <button
-                onClick={requestCamera}
-                className="w-full py-2 bg-red-700 hover:bg-red-600 text-white rounded-lg text-sm font-semibold transition-colors"
-              >
+            <div className="bg-rose-50 border border-rose-200 rounded-xl p-4">
+              <p className="text-rose-700 text-sm font-medium mb-1">Camera access denied</p>
+              <p className="text-rose-500 text-xs mb-3">Allow camera access in your browser settings and try again.</p>
+              <button onClick={requestCamera}
+                className="w-full py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-sm font-medium transition-colors">
                 Retry
               </button>
             </div>
           )}
         </div>
 
-        {/* Step 2: System check */}
-        <div className={`mb-5 transition-opacity ${cameraStatus === 'granted' ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
-          <StepHeader step={2} done={systemCheckPassed} label="System Check" />
+        {/* Step 2: Screen monitoring */}
+        <div className={`bg-white rounded-2xl border border-slate-200 p-5 mb-4 transition-opacity ${cameraStatus === 'granted' ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+          <StepHeader step={2} done={screenStatus === 'granted'} label="Screen Monitoring" />
+
+          {screenStatus === 'idle' && (
+            <div>
+              <p className="text-slate-500 text-xs mb-1 leading-relaxed">
+                You must share your <span className="text-slate-700 font-medium">entire screen</span> with the exam system. This stream is monitored throughout.
+              </p>
+              <p className="text-slate-400 text-xs mb-3">Stopping screen share counts as a violation and pauses the exam.</p>
+              <button onClick={requestScreenAccess}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition-colors">
+                Share Entire Screen
+              </button>
+            </div>
+          )}
+
+          {screenStatus === 'checking' && (
+            <div className="flex items-center gap-3 py-1">
+              <div className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin shrink-0" />
+              <p className="text-slate-500 text-sm">Waiting for screen selection…</p>
+            </div>
+          )}
+
+          {screenStatus === 'wrong_surface' && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <p className="text-amber-800 text-sm font-medium mb-1">Incorrect selection</p>
+              <p className="text-amber-600 text-xs mb-3">
+                You selected a tab or window. Choose <strong>Entire Screen</strong> or <strong>Your Entire Screen</strong> in the picker.
+              </p>
+              <button onClick={requestScreenAccess}
+                className="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-medium transition-colors">
+                Try Again
+              </button>
+            </div>
+          )}
+
+          {screenStatus === 'granted' && (
+            <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+              <div className="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center shrink-0">
+                <CheckIcon className="w-4 h-4 text-emerald-600" />
+              </div>
+              <div>
+                <p className="text-emerald-700 text-xs font-semibold">Screen monitoring active</p>
+                <p className="text-slate-400 text-[10px] mt-0.5">Do not stop sharing — this will pause your exam.</p>
+              </div>
+            </div>
+          )}
+
+          {screenStatus === 'denied' && (
+            <div className="bg-rose-50 border border-rose-200 rounded-xl p-4">
+              <p className="text-rose-700 text-sm font-medium mb-1">Screen access denied or stopped</p>
+              <p className="text-rose-500 text-xs mb-3">Screen monitoring is required. Click below and select your entire screen.</p>
+              <button onClick={requestScreenAccess}
+                className="w-full py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-sm font-medium transition-colors">
+                Retry
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Step 3: System check */}
+        <div className={`bg-white rounded-2xl border border-slate-200 p-5 mb-4 transition-opacity ${screenStatus === 'granted' ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+          <StepHeader step={3} done={systemCheckPassed} label="System Check" />
 
           <div className="space-y-3">
-            <div className={`rounded-xl border p-3 ${
-              monitorStatus === 'extra_detected'
-                ? 'bg-red-900/20 border-red-700'
-                : monitorStatus === 'ok'
-                ? 'bg-gray-800 border-gray-600'
-                : 'bg-gray-800 border-gray-700'
+            <div className={`rounded-xl border p-3.5 ${
+              monitorStatus === 'extra_detected' ? 'bg-rose-50 border-rose-200'
+              : monitorStatus === 'ok'           ? 'bg-emerald-50 border-emerald-200'
+                                                 : 'bg-slate-50 border-slate-200'
             }`}>
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-base">🖥</span>
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                    monitorStatus === 'ok' ? 'bg-emerald-100' : monitorStatus === 'extra_detected' ? 'bg-rose-100' : 'bg-slate-100'
+                  }`}>
+                    <svg className={`w-4 h-4 ${monitorStatus === 'ok' ? 'text-emerald-600' : monitorStatus === 'extra_detected' ? 'text-rose-500' : 'text-slate-400'}`}
+                      fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25m18 0A2.25 2.25 0 0018.75 3H5.25A2.25 2.25 0 003 5.25m18 0H3" />
+                    </svg>
+                  </div>
                   <div>
-                    <p className="text-xs font-semibold text-white">Display Check</p>
-                    {monitorStatus === 'unchecked' && <p className="text-xs text-gray-400">Checking for extra monitors…</p>}
-                    {monitorStatus === 'ok'         && <p className="text-xs text-green-400">✓ Single display detected</p>}
-                    {monitorStatus === 'extra_detected' && <p className="text-xs text-red-400">Extra monitor detected — please disconnect it</p>}
+                    <p className="text-xs font-semibold text-slate-700">Display Check</p>
+                    {monitorStatus === 'unchecked'      && <p className="text-xs text-slate-400">Checking displays…</p>}
+                    {monitorStatus === 'ok'             && <p className="text-xs text-emerald-600">Single display detected</p>}
+                    {monitorStatus === 'extra_detected' && <p className="text-xs text-rose-500">Extra monitor detected — please disconnect it</p>}
                   </div>
                 </div>
                 {monitorStatus !== 'unchecked' && (
-                  <button onClick={runMonitorCheck} className="text-xs text-blue-400 hover:text-blue-300 underline shrink-0 ml-2">
+                  <button onClick={runMonitorCheck} className="text-xs text-indigo-600 hover:text-indigo-800 font-medium ml-2">
                     Re-check
                   </button>
                 )}
               </div>
               {monitorStatus === 'extra_detected' && (
-                <p className="text-red-300/70 text-xs mt-2">
-                  Disconnect the extra monitor, then click <strong>Re-check</strong>.
-                </p>
+                <p className="text-rose-500 text-xs mt-2 pl-10">Disconnect the extra monitor, then click Re-check.</p>
               )}
             </div>
 
             {monitorStatus === 'ok' && (
-              <div className="bg-gray-800 border border-gray-600 rounded-xl p-3 space-y-2.5">
-                <p className="text-xs text-gray-400 font-semibold mb-1">Please confirm before continuing:</p>
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+                <p className="text-xs text-slate-500 font-semibold">Please confirm before continuing:</p>
                 <label className="flex items-start gap-3 cursor-pointer group">
-                  <input
-                    type="checkbox"
-                    checked={declarations.noExternalKeyboard}
-                    onChange={e => setDeclarations(p => ({ ...p, noExternalKeyboard: e.target.checked }))}
-                    className="mt-0.5 accent-blue-500 w-4 h-4 shrink-0"
-                  />
-                  <span className="text-xs text-gray-300 group-hover:text-white transition-colors leading-relaxed">
-                    I have <strong className="text-white">disconnected all external keyboards, mice, and recording devices</strong> from this computer.
+                  <div className={`mt-0.5 w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-all ${
+                    declarations.noExternalKeyboard ? 'bg-indigo-600 border-indigo-600' : 'border-slate-300 bg-white'
+                  }`}>
+                    {declarations.noExternalKeyboard && <CheckIcon className="w-2.5 h-2.5 text-white" />}
+                    <input type="checkbox" checked={declarations.noExternalKeyboard}
+                      onChange={e => setDeclarations(p => ({ ...p, noExternalKeyboard: e.target.checked }))}
+                      className="sr-only" />
+                  </div>
+                  <span className="text-xs text-slate-600 leading-relaxed">
+                    I have <strong className="text-slate-800">disconnected all external keyboards, mice, and recording devices</strong>.
                   </span>
                 </label>
                 <label className="flex items-start gap-3 cursor-pointer group">
-                  <input
-                    type="checkbox"
-                    checked={declarations.noBackgroundApps}
-                    onChange={e => setDeclarations(p => ({ ...p, noBackgroundApps: e.target.checked }))}
-                    className="mt-0.5 accent-blue-500 w-4 h-4 shrink-0"
-                  />
-                  <span className="text-xs text-gray-300 group-hover:text-white transition-colors leading-relaxed">
-                    I have <strong className="text-white">closed all other applications</strong> running in the background.
+                  <div className={`mt-0.5 w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-all ${
+                    declarations.noBackgroundApps ? 'bg-indigo-600 border-indigo-600' : 'border-slate-300 bg-white'
+                  }`}>
+                    {declarations.noBackgroundApps && <CheckIcon className="w-2.5 h-2.5 text-white" />}
+                    <input type="checkbox" checked={declarations.noBackgroundApps}
+                      onChange={e => setDeclarations(p => ({ ...p, noBackgroundApps: e.target.checked }))}
+                      className="sr-only" />
+                  </div>
+                  <span className="text-xs text-slate-600 leading-relaxed">
+                    I have <strong className="text-slate-800">closed all other applications</strong> running in the background.
                   </span>
                 </label>
               </div>
@@ -323,20 +470,25 @@ function ExamPageContent() {
           </div>
         </div>
 
-        {/* Step 3: Rules */}
-        <div className={`mb-6 transition-opacity ${systemCheckPassed && cameraStatus === 'granted' ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
-          <StepHeader step={3} done={false} label="Proctoring Rules" />
-          <div className="bg-yellow-900/30 border border-yellow-700 rounded-xl p-4">
-            <ul className="text-yellow-200/80 text-xs space-y-1.5">
-              <li>• The exam opens in <strong className="text-yellow-300">fullscreen</strong> — do not exit</li>
-              <li>• Do not switch browser tabs or minimize the window</li>
-              <li>• Do not switch to any other application</li>
-              <li>• Right-click, copy, cut, and paste are <strong className="text-yellow-300">blocked</strong></li>
-              <li>• Keyboard shortcuts (F12, Ctrl+U, Ctrl+S, Ctrl+P, DevTools) are blocked</li>
-              <li>• Camera snapshots are taken every 2 minutes</li>
-              <li>• Developer tools and extra monitors are detected and flagged</li>
-              <li>• Mouse activity is monitored for inactivity and unusual patterns</li>
-              <li>• Exam <strong className="text-yellow-300">auto-submits</strong> after {examConfig.maxViolations} violations</li>
+        {/* Step 4: Rules */}
+        <div className={`bg-white rounded-2xl border border-slate-200 p-5 mb-6 transition-opacity ${canStart ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+          <StepHeader step={4} done={false} label="Exam Rules" />
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+            <ul className="space-y-2">
+              {[
+                'The exam opens in fullscreen — do not exit',
+                'Do not switch browser tabs or minimize the window',
+                'Stop screen sharing = exam immediately pauses',
+                'Right-click, copy, cut, and paste are blocked',
+                'Keyboard shortcuts (F12, DevTools) are blocked',
+                'Camera snapshots are taken every 2 minutes',
+                `Exam auto-submits after ${examConfig.maxViolations} violations`,
+              ].map(rule => (
+                <li key={rule} className="flex items-start gap-2">
+                  <div className="w-1 h-1 rounded-full bg-amber-500 mt-1.5 shrink-0" />
+                  <span className="text-xs text-amber-800">{rule}</span>
+                </li>
+              ))}
             </ul>
           </div>
         </div>
@@ -344,30 +496,26 @@ function ExamPageContent() {
         <button
           onClick={handleStart}
           disabled={!canStart}
-          className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${
+          className={`w-full py-3.5 rounded-2xl font-semibold text-sm transition-all flex items-center justify-center gap-2 ${
             canStart
-              ? 'bg-blue-600 hover:bg-blue-500 text-white cursor-pointer'
-              : 'bg-gray-700 text-gray-500 cursor-not-allowed'
+              ? 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm cursor-pointer'
+              : 'bg-slate-100 text-slate-400 cursor-not-allowed'
           }`}
         >
-          {cameraStatus !== 'granted' ? 'Complete Step 1 First'
-            : !systemCheckPassed      ? 'Complete Step 2 First'
-            : 'Start Exam — Enter Fullscreen'}
+          {cameraStatus !== 'granted'  ? 'Complete Step 1 to continue'
+            : screenStatus !== 'granted' ? 'Complete Step 2 to continue'
+            : !systemCheckPassed         ? 'Complete Step 3 to continue'
+            : (
+              <>
+                Begin Exam — Enter Fullscreen
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                </svg>
+              </>
+            )
+          }
         </button>
-      </div>
-    </div>
-  );
-}
-
-function StepHeader({ step, done, label }: { step: number; done: boolean; label: string }) {
-  return (
-    <div className="flex items-center gap-2 mb-3">
-      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-        done ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-300'
-      }`}>
-        {done ? '✓' : step}
-      </div>
-      <p className="text-sm font-semibold text-white">{label}</p>
+      </main>
     </div>
   );
 }
@@ -375,8 +523,8 @@ function StepHeader({ step, done, label }: { step: number; done: boolean; label:
 export default function ExamPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
       </div>
     }>
       <ExamPageContent />

@@ -6,27 +6,31 @@ interface TimerProps {
 }
 
 export default function Timer({ timeRemaining, totalDuration }: TimerProps) {
+  void totalDuration;
   const h = Math.floor(timeRemaining / 3600);
   const m = Math.floor((timeRemaining % 3600) / 60);
   const s = timeRemaining % 60;
-
   const pad = (n: number) => n.toString().padStart(2, '0');
-  const percent = (timeRemaining / totalDuration) * 100;
 
-  const urgency = timeRemaining < 300 ? 'text-red-500' : timeRemaining < 600 ? 'text-yellow-500' : 'text-green-400';
-  const barColor = timeRemaining < 300 ? 'bg-red-500' : timeRemaining < 600 ? 'bg-yellow-400' : 'bg-green-400';
+  const isUrgent  = timeRemaining < 300;
+  const isWarning = !isUrgent && timeRemaining < 600;
 
   return (
-    <div className="flex items-center gap-3">
-      <div className={`font-mono text-xl font-bold ${urgency} ${timeRemaining < 300 ? 'animate-pulse' : ''}`}>
-        {h > 0 && <span>{pad(h)}:</span>}
-        <span>{pad(m)}:{pad(s)}</span>
-      </div>
-      <div className="w-24 h-2 bg-gray-700 rounded-full overflow-hidden">
-        <div
-          className={`h-full ${barColor} transition-all duration-1000`}
-          style={{ width: `${percent}%` }}
-        />
+    <div className="flex items-center gap-2">
+      <svg className={`w-4 h-4 shrink-0 ${isUrgent ? 'text-rose-500' : isWarning ? 'text-amber-500' : 'text-slate-400'}`}
+        fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      <div className="text-right">
+        <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider leading-none mb-0.5">
+          Remaining Time
+        </p>
+        <span className={`font-semibold text-sm tabular-nums tracking-tight leading-none ${
+          isUrgent ? 'text-rose-600 animate-pulse' : isWarning ? 'text-amber-600' : 'text-slate-900'
+        }`}>
+          {h > 0 && <span>{pad(h)}:</span>}
+          {pad(m)}:{pad(s)}
+        </span>
       </div>
     </div>
   );
