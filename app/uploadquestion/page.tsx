@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { Fragment, useState, useCallback } from "react";
 import api from "@/lib/api";
+import CurriculumManager from "@/components/CurriculumManager";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -276,7 +277,7 @@ function QuestionCard({ q, index }: { q: QuestionCreate; index: number }) {
             }}
           >
             {q.match_pairs.map((pair, i) => (
-              <>
+              <Fragment key={i}>
                 <div
                   key={`l-${i}`}
                   style={{
@@ -307,7 +308,7 @@ function QuestionCard({ q, index }: { q: QuestionCreate; index: number }) {
                 >
                   {pair.right_text}
                 </div>
-              </>
+              </Fragment>
             ))}
           </div>
         </div>
@@ -439,7 +440,9 @@ const SAMPLE_HINT = `{
 }`;
 
 export default function CurriculumImportPage() {
+  const [tab, setTab] = useState<"import" | "manage">("import");
   const [jsonText, setJsonText] = useState("");
+  const [rawData, setRawData] = useState<Record<string, unknown> | null>(null);
   const [parsed, setParsed] = useState<CurriculumCreate | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
@@ -450,28 +453,33 @@ export default function CurriculumImportPage() {
     setParseError(null);
     try {
       const raw = JSON.parse(jsonText);
+      // Preview is still rendered from the normalized shape for readability,
+      // but the backend now receives the raw JSON as-is and does the
+      // MCQ/Multi/Match/Fill normalization itself (single source of truth).
       const transformed = transformRawJson(raw);
+      setRawData(raw);
       setParsed(transformed);
       setSaveStatus("idle");
       setSavedId(null);
     } catch (e) {
       setParseError((e as Error).message);
+      setRawData(null);
       setParsed(null);
     }
   }, [jsonText]);
 
   const handleSave = useCallback(async () => {
-    if (!parsed) return;
+    if (!rawData) return;
     setSaveStatus("saving");
     try {
-      const { data } = await api.post<{ id: number }>("/curricula/", parsed);
+      const { data } = await api.post<{ id: number; title: string }>("/curricula/", rawData);
       setSavedId(data.id);
       setSaveStatus("success");
     } catch (e) {
       console.error(e);
       setSaveStatus("error");
     }
-  }, [parsed]);
+  }, [rawData]);
 
   const filteredQuestions = parsed
     ? activeFilter === "All"
@@ -517,10 +525,46 @@ export default function CurriculumImportPage() {
           </div>
           <span style={{ fontWeight: 600, fontSize: 15, color: "#111827" }}>Curriculum Studio</span>
         </div>
-        <span style={{ fontSize: 12, color: "#9CA3AF" }}>Import · Preview · Save</span>
+        <div style={{ display: "flex", gap: 4, background: "#F3F4F6", borderRadius: 10, padding: 3 }}>
+          <button
+            onClick={() => setTab("import")}
+            style={{
+              padding: "6px 14px",
+              fontSize: 12,
+              fontWeight: 600,
+              borderRadius: 7,
+              border: "none",
+              cursor: "pointer",
+              background: tab === "import" ? "#fff" : "transparent",
+              color: tab === "import" ? "#111827" : "#9CA3AF",
+              boxShadow: tab === "import" ? "0 1px 2px rgba(0,0,0,0.06)" : "none",
+            }}
+          >
+            Import New
+          </button>
+          <button
+            onClick={() => setTab("manage")}
+            style={{
+              padding: "6px 14px",
+              fontSize: 12,
+              fontWeight: 600,
+              borderRadius: 7,
+              border: "none",
+              cursor: "pointer",
+              background: tab === "manage" ? "#fff" : "transparent",
+              color: tab === "manage" ? "#111827" : "#9CA3AF",
+              boxShadow: tab === "manage" ? "0 1px 2px rgba(0,0,0,0.06)" : "none",
+            }}
+          >
+            Manage Existing
+          </button>
+        </div>
       </header>
 
+      {tab === "manage" && <CurriculumManager />}
+
       {/* Split layout */}
+      {tab === "import" && (
       <div
         style={{
           display: "grid",
@@ -713,6 +757,7 @@ export default function CurriculumImportPage() {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }

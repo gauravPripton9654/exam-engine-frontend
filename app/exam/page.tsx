@@ -4,7 +4,8 @@ import { Suspense, useEffect, useRef, useState, useCallback } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { fetchCurriculum, fetchQuestions } from '@/lib/api';
-import { CandidateInfo, ExamConfig, ApiQuestion, Question } from '@/types';
+import { toRuntimeQuestion } from '@/lib/questions';
+import { CandidateInfo, ExamConfig, ExamMode } from '@/types';
 
 const ExamInterface = dynamic(() => import('@/components/ExamInterface'), {
   ssr: false,
@@ -22,20 +23,6 @@ type CameraStatus  = 'idle' | 'checking' | 'granted' | 'denied';
 type ScreenStatus  = 'idle' | 'checking' | 'granted' | 'denied' | 'wrong_surface';
 type MonitorStatus = 'unchecked' | 'ok' | 'extra_detected';
 
-function toRuntimeQuestion(q: ApiQuestion): Question {
-  return {
-    id: q.id,
-    qtype: q.qtype,
-    text: q.stem,
-    category: q.subject,
-    skill: q.skill,
-    level: q.level,
-    options: [...q.mcq_options].sort((a, b) => a.sort_order - b.sort_order),
-    pairs:   [...q.match_pairs].sort((a, b) => a.sort_order - b.sort_order),
-    blanks:  [...q.fill_blanks].sort((a, b) => a.sort_order - b.sort_order),
-  };
-}
-
 function CheckIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -44,7 +31,13 @@ function CheckIcon({ className }: { className?: string }) {
   );
 }
 
-function StepHeader({ step, done, label }: { step: number; done: boolean; label: string }) {
+const MODE_INFO: Record<ExamMode, { title: string; description: string }> = {
+  easy:   { title: 'Easy',   description: 'No restrictions — just the exam timer.' },
+  medium: { title: 'Medium', description: 'Anti-cheat monitoring, no camera required.' },
+  hard:   { title: 'Hard',   description: 'Full monitoring plus camera snapshots.' },
+};
+
+function StepHeader({ step, done, label }: { step: number | string; done: boolean; label: string }) {
   return (
     <div className="flex items-center gap-3 mb-3">
       <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 transition-all ${
@@ -63,10 +56,11 @@ function ExamPageContent() {
   const router       = useRouter();
 
   const [candidate, setCandidate]         = useState<CandidateInfo | null>(null);
-  const [examConfig, setExamConfig]       = useState<ExamConfig | null>(null);
+  const [examConfig, setExamConfig]       = useState<Omit<ExamConfig, 'mode'> | null>(null);
   const [loadingExam, setLoadingExam]     = useState(true);
   const [examError, setExamError]         = useState<string | null>(null);
   const [started, setStarted]             = useState(false);
+  const [mode, setMode]                   = useState<ExamMode | null>(null);
 
   const [cameraStatus, setCameraStatus]   = useState<CameraStatus>('idle');
   const [screenStatus, setScreenStatus]   = useState<ScreenStatus>('idle');
@@ -80,6 +74,7 @@ function ExamPageContent() {
   const previewVideoRef  = useRef<HTMLVideoElement>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef  = useRef<MediaStream | null>(null);
+  const audioStreamRef   = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     const ua = navigator.userAgent;
@@ -115,6 +110,7 @@ function ExamPageContent() {
     return () => {
       previewStreamRef.current?.getTracks().forEach(t => t.stop());
       screenStreamRef.current?.getTracks().forEach(t => t.stop());
+      audioStreamRef.current?.getTracks().forEach(t => t.stop());
     };
   }, []);
 
@@ -123,10 +119,21 @@ function ExamPageContent() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false,
+        // Requested together with the camera, right here, for hard mode —
+        // one combined permission prompt at this step.
+        audio: mode === 'hard',
       });
       previewStreamRef.current = stream;
       if (previewVideoRef.current) previewVideoRef.current.srcObject = stream;
+
+      // Keep the audio track alive as its own stream so handleStart() can
+      // stop only the video preview later without cutting off the mic —
+      // this same track keeps recording all the way through the exam.
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length > 0) {
+        audioStreamRef.current = new MediaStream(audioTracks);
+      }
+
       setCameraStatus('granted');
     } catch {
       setCameraStatus('denied');
@@ -169,19 +176,32 @@ function ExamPageContent() {
     if (screenStatus === 'granted') runMonitorCheck();
   }, [screenStatus, runMonitorCheck]);
 
+  const cameraRequired = mode === 'hard';
+  const screenRequired = mode === 'medium' || mode === 'hard';
+
   const systemCheckPassed =
-    monitorStatus === 'ok' &&
-    declarations.noExternalKeyboard &&
-    declarations.noBackgroundApps;
+    !screenRequired ||
+    (monitorStatus === 'ok' &&
+      declarations.noExternalKeyboard &&
+      declarations.noBackgroundApps);
 
   const canStart =
-    cameraStatus === 'granted' &&
-    screenStatus === 'granted' &&
+    mode !== null &&
+    (!cameraRequired || cameraStatus === 'granted') &&
+    (!screenRequired || screenStatus === 'granted') &&
     systemCheckPassed;
 
   const handleStart = () => {
-    previewStreamRef.current?.getTracks().forEach(t => t.stop());
+    // Only stop the video track — the audio track is shared with
+    // audioStreamRef (see requestCamera) and needs to keep running for the
+    // exam's mic recording.
+    previewStreamRef.current?.getVideoTracks().forEach(t => t.stop());
     previewStreamRef.current = null;
+
+    if (mode === 'easy') {
+      setStarted(true);
+      return;
+    }
     document.documentElement
       .requestFullscreen?.()
       .catch(() => {})
@@ -232,12 +252,13 @@ function ExamPageContent() {
     );
   }
 
-  if (started) {
+  if (started && mode) {
     return (
       <ExamInterface
         candidate={candidate}
-        exam={examConfig}
+        exam={{ ...examConfig, mode }}
         screenStream={screenStreamRef.current}
+        audioStream={audioStreamRef.current}
       />
     );
   }
@@ -273,7 +294,9 @@ function ExamPageContent() {
             {[
               { label: 'Questions', value: String(examConfig.questions.length) },
               { label: 'Duration', value: `${examConfig.duration / 60} min` },
-              { label: 'Max Violations', value: String(examConfig.maxViolations) },
+              mode === 'easy'
+                ? { label: 'Mode', value: 'Timer Only' }
+                : { label: 'Max Violations', value: String(examConfig.maxViolations) },
             ].map(({ label, value }) => (
               <div key={label} className="text-center px-4 first:pl-0 last:pr-0">
                 <p className="text-lg font-semibold text-slate-900">{value}</p>
@@ -283,14 +306,38 @@ function ExamPageContent() {
           </div>
         </div>
 
-        {/* Step 1: Camera */}
+        {/* Step 1: Difficulty */}
         <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-4">
-          <StepHeader step={1} done={cameraStatus === 'granted'} label="Camera Access" />
+          <StepHeader step={1} done={mode !== null} label="Choose Exam Mode" />
+          <div className="grid grid-cols-3 gap-3">
+            {(Object.keys(MODE_INFO) as ExamMode[]).map(m => (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                className={`text-left rounded-xl border-2 p-3.5 transition-all ${
+                  mode === m
+                    ? 'border-indigo-600 bg-indigo-50'
+                    : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <p className={`text-sm font-semibold ${mode === m ? 'text-indigo-700' : 'text-slate-800'}`}>
+                  {MODE_INFO[m].title}
+                </p>
+                <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">{MODE_INFO[m].description}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Step 2: Camera */}
+        {cameraRequired && (
+        <div className={`bg-white rounded-2xl border border-slate-200 p-5 mb-4 transition-opacity ${mode !== null ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+          <StepHeader step={2} done={cameraStatus === 'granted'} label="Camera Access" />
 
           {cameraStatus === 'idle' && (
             <div>
               <p className="text-slate-500 text-xs mb-3 leading-relaxed">
-                Camera access is required. A snapshot is taken every 2 minutes to verify your identity.
+                Camera and microphone access are required. A snapshot is taken every 2 minutes to verify your identity, and your microphone is recorded throughout the exam for transcription.
               </p>
               <button onClick={requestCamera}
                 className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition-colors">
@@ -322,6 +369,24 @@ function ExamPageContent() {
                 </div>
                 <p className="text-emerald-700 text-xs font-medium">Camera access granted</p>
               </div>
+              {mode === 'hard' && (
+                <div className="px-3 py-2 border-t border-slate-100 flex items-center gap-2">
+                  <div className={`w-4 h-4 rounded-full flex items-center justify-center ${
+                    (audioStreamRef.current?.getAudioTracks().length ?? 0) > 0 ? 'bg-emerald-100' : 'bg-rose-100'
+                  }`}>
+                    {(audioStreamRef.current?.getAudioTracks().length ?? 0) > 0
+                      ? <CheckIcon className="w-2.5 h-2.5 text-emerald-600" />
+                      : <span className="text-rose-600 text-[10px] font-bold">!</span>}
+                  </div>
+                  <p className={`text-xs font-medium ${
+                    (audioStreamRef.current?.getAudioTracks().length ?? 0) > 0 ? 'text-emerald-700' : 'text-rose-600'
+                  }`}>
+                    {(audioStreamRef.current?.getAudioTracks().length ?? 0) > 0
+                      ? `Microphone captured (${audioStreamRef.current!.getAudioTracks().length} track)`
+                      : 'No microphone track captured — retry Camera Access'}
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
@@ -336,17 +401,19 @@ function ExamPageContent() {
             </div>
           )}
         </div>
+        )}
 
-        {/* Step 2: Screen monitoring */}
-        <div className={`bg-white rounded-2xl border border-slate-200 p-5 mb-4 transition-opacity ${cameraStatus === 'granted' ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
-          <StepHeader step={2} done={screenStatus === 'granted'} label="Screen Monitoring" />
+        {/* Step 3: Screen monitoring */}
+        {screenRequired && (
+        <div className={`bg-white rounded-2xl border border-slate-200 p-5 mb-4 transition-opacity ${(!cameraRequired || cameraStatus === 'granted') ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+          <StepHeader step={3} done={screenStatus === 'granted'} label="Screen Monitoring" />
 
           {screenStatus === 'idle' && (
             <div>
               <p className="text-slate-500 text-xs mb-1 leading-relaxed">
                 You must share your <span className="text-slate-700 font-medium">entire screen</span> with the exam system. This stream is monitored throughout.
               </p>
-              <p className="text-slate-400 text-xs mb-3">Stopping screen share counts as a violation and pauses the exam.</p>
+              <p className="text-slate-400 text-xs mb-3">Stopping screen share is flagged as a high-severity violation.</p>
               <button onClick={requestScreenAccess}
                 className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition-colors">
                 Share Entire Screen
@@ -381,7 +448,7 @@ function ExamPageContent() {
               </div>
               <div>
                 <p className="text-emerald-700 text-xs font-semibold">Screen monitoring active</p>
-                <p className="text-slate-400 text-[10px] mt-0.5">Do not stop sharing — this will pause your exam.</p>
+                <p className="text-slate-400 text-[10px] mt-0.5">Do not stop sharing — it will be flagged as a violation.</p>
               </div>
             </div>
           )}
@@ -397,10 +464,12 @@ function ExamPageContent() {
             </div>
           )}
         </div>
+        )}
 
-        {/* Step 3: System check */}
+        {/* Step 4: System check */}
+        {screenRequired && (
         <div className={`bg-white rounded-2xl border border-slate-200 p-5 mb-4 transition-opacity ${screenStatus === 'granted' ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
-          <StepHeader step={3} done={systemCheckPassed} label="System Check" />
+          <StepHeader step={4} done={systemCheckPassed} label="System Check" />
 
           <div className="space-y-3">
             <div className={`rounded-xl border p-3.5 ${
@@ -469,20 +538,28 @@ function ExamPageContent() {
             )}
           </div>
         </div>
+        )}
 
-        {/* Step 4: Rules */}
-        <div className={`bg-white rounded-2xl border border-slate-200 p-5 mb-6 transition-opacity ${canStart ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
-          <StepHeader step={4} done={false} label="Exam Rules" />
+        {/* Step 5: Rules */}
+        <div className={`bg-white rounded-2xl border border-slate-200 p-5 mb-6 transition-opacity ${mode !== null ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+          <StepHeader step={5} done={false} label="Exam Rules" />
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
             <ul className="space-y-2">
               {[
-                'The exam opens in fullscreen — do not exit',
-                'Do not switch browser tabs or minimize the window',
-                'Stop screen sharing = exam immediately pauses',
-                'Right-click, copy, cut, and paste are blocked',
-                'Keyboard shortcuts (F12, DevTools) are blocked',
-                'Camera snapshots are taken every 2 minutes',
-                `Exam auto-submits after ${examConfig.maxViolations} violations`,
+                ...(mode !== 'easy' ? [
+                  'The exam opens in fullscreen — do not exit',
+                  'Do not switch browser tabs or minimize the window',
+                  'Right-click, copy, cut, and paste are blocked',
+                  'Keyboard shortcuts (F12, DevTools) are blocked',
+                ] : []),
+                ...(screenRequired ? ['Stop screen sharing is flagged as a violation'] : []),
+                ...(cameraRequired ? [
+                  'Camera snapshots are taken every 2 minutes',
+                  'Microphone audio is recorded throughout and transcribed',
+                ] : []),
+                mode !== 'easy'
+                  ? `Exam auto-submits after ${examConfig.maxViolations} violations, or when time runs out`
+                  : 'Exam auto-submits when time runs out',
               ].map(rule => (
                 <li key={rule} className="flex items-start gap-2">
                   <div className="w-1 h-1 rounded-full bg-amber-500 mt-1.5 shrink-0" />
@@ -502,12 +579,13 @@ function ExamPageContent() {
               : 'bg-slate-100 text-slate-400 cursor-not-allowed'
           }`}
         >
-          {cameraStatus !== 'granted'  ? 'Complete Step 1 to continue'
-            : screenStatus !== 'granted' ? 'Complete Step 2 to continue'
-            : !systemCheckPassed         ? 'Complete Step 3 to continue'
+          {mode === null                                       ? 'Choose an exam mode to continue'
+            : cameraRequired && cameraStatus !== 'granted'      ? 'Complete Camera Access to continue'
+            : screenRequired && screenStatus !== 'granted'      ? 'Complete Screen Monitoring to continue'
+            : !systemCheckPassed                                ? 'Complete System Check to continue'
             : (
               <>
-                Begin Exam — Enter Fullscreen
+                {mode === 'easy' ? 'Begin Exam' : 'Begin Exam — Enter Fullscreen'}
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
                 </svg>

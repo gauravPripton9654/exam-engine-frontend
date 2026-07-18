@@ -116,11 +116,14 @@ export interface Question {
   blanks: FillBlank[];
 }
 
+export type ExamMode = 'easy' | 'medium' | 'hard';
+
 export interface ExamConfig {
   id: string;
   name: string;
   duration: number;
   maxViolations: number;
+  mode: ExamMode;
   questions: Question[];
 }
 
@@ -145,6 +148,96 @@ export interface PeriodicSnapshot {
   id: string;
   timestamp: Date;
   image: string;
+}
+
+// ── Audio transcription (hard mode) ───────────────────────────────────────────
+// The mic is recorded continuously during the exam; on submit, the recording
+// is uploaded once to the backend for faster-whisper transcription. The
+// backend never persists the audio file itself — only the resulting text.
+
+export type TranscriptStatus = 'none' | 'processing' | 'done' | 'failed';
+
+export interface TranscriptResult {
+  session_id: string;
+  transcript_status: TranscriptStatus;
+  transcript: string | null;
+  transcript_error: string | null;
+}
+
+// ── Detailed activity log (medium/hard mode analytics) ───────────────────────
+
+export type ActivityEventType =
+  | 'exam_started'
+  | 'question_viewed'
+  | 'answer_changed'
+  | 'marked_for_review'
+  | 'unmarked_for_review'
+  | 'exam_submitted'
+  | 'exam_terminated';
+
+export interface ActivityEvent {
+  id: string;
+  type: ActivityEventType;
+  timestamp: Date;
+  questionId?: number;
+  details?: Record<string, unknown>;
+}
+
+export interface SessionData {
+  sessionId: string;
+  candidate: CandidateInfo;
+  examId: string;
+  examName: string;
+  examMode: ExamMode;
+  startTime: Date | null;
+  endTime: Date;
+  answers: Record<number, AnswerValue>;
+  violations: Violation[];
+  snapshots: PeriodicSnapshot[];
+  activityLog: ActivityEvent[];
+  score: number | null;
+  status: string;
+  totalQuestions: number;
+  answeredCount: number;
+  violationCount: number;
+}
+
+// ── Admin panel: read models from GET /sessions/ and /sessions/{id} ──────────
+// The backend stores whatever SessionData JSON the frontend POSTs, then
+// re-exposes it with a flattened, snake_case set of top-level columns for
+// filtering/sorting. The nested blobs (answers/violations/snapshots/
+// activity_log) come back exactly as submitted, so their inner shapes match
+// AnswerValue/Violation/PeriodicSnapshot/ActivityEvent above. transcript_*
+// fields are populated asynchronously by POST .../transcribe — 'none' until
+// an audio upload has been kicked off for this session.
+
+export interface SessionSummary {
+  id: number;
+  session_id: string;
+  candidate_id: string;
+  candidate_name: string;
+  candidate_email: string;
+  curriculum_id: number;
+  exam_name: string;
+  exam_mode: ExamMode;
+  start_time: string;
+  end_time: string;
+  score: number | null;
+  status: string;
+  total_questions: number;
+  answered_count: number;
+  violation_count: number;
+  created_at: string;
+  transcript_status?: TranscriptStatus;
+  transcript?: string | null;
+  transcript_error?: string | null;
+}
+
+export interface SessionDetail extends SessionSummary {
+  answers: Record<string, AnswerValue>;
+  violations: Violation[];
+  snapshots: PeriodicSnapshot[];
+  activity_log: ActivityEvent[];
 }
 
 export interface DetectionState {

@@ -5,8 +5,13 @@ import { Violation, ViolationType, VIOLATION_CONFIG, PeriodicSnapshot } from '@/
 
 interface UseProctorOptions {
   enabled: boolean;
+  enableCamera: boolean;
   onNewViolation?: (v: Violation) => void;
   screenStream: MediaStream | null;
+  // Acquired by the setup page at "Begin Exam" click — not re-requested
+  // here, so the mic permission prompt happens at that exact moment
+  // instead of silently reusing whatever was granted earlier.
+  audioStream: MediaStream | null;
 }
 
 export interface ProctorState {
@@ -15,6 +20,7 @@ export interface ProctorState {
   isWindowFocused: boolean;
   violations: Violation[];
   periodicSnapshots: PeriodicSnapshot[];
+  audioReady: boolean;
   cameraError: string | null;
   cameraStream: MediaStream | null;
 }
@@ -24,22 +30,40 @@ const MOUSE_INACTIVE_MS    = 3 * 60 * 1000;  // 3 minutes with no mouse movement
 const BOT_CHECK_MS         = 30 * 1000;       // analyze mouse pattern every 30s
 const MIN_BOT_SPEEDS       = 20;              // minimum velocity samples needed for bot check
 
-export function useProctor({ enabled, onNewViolation, screenStream }: UseProctorOptions) {
+export function useProctor({ enabled, enableCamera, onNewViolation, screenStream, audioStream }: UseProctorOptions) {
   const [state, setState] = useState<ProctorState>({
     isReady:           false,
     isFullscreen:      false,
     isWindowFocused:   true,
     violations:        [],
     periodicSnapshots: [],
+    audioReady:        false,
     cameraError:       null,
     cameraStream:      null,
   });
 
-  const cooldownRef       = useRef<Partial<Record<ViolationType, number>>>({});
-  const streamRef         = useRef<MediaStream | null>(null);
-  const hiddenVideoRef    = useRef<HTMLVideoElement | null>(null);
-  const lastMouseMoveRef  = useRef<number>(0);
-  const mousePositionsRef = useRef<Array<{ x: number; y: number; t: number }>>([]);
+  const cooldownRef        = useRef<Partial<Record<ViolationType, number>>>({});
+  const streamRef          = useRef<MediaStream | null>(null);
+  const hiddenVideoRef     = useRef<HTMLVideoElement | null>(null);
+  const lastMouseMoveRef   = useRef<number>(0);
+  const mousePositionsRef  = useRef<Array<{ x: number; y: number; t: number }>>([]);
+  const audioRecorderRef   = useRef<MediaRecorder | null>(null);
+  const audioStoppedRef    = useRef(false);
+  const audioResultRef     = useRef<Promise<Blob | null> | null>(null);
+
+  // Stops the (single, continuous) recording and resolves with the whole
+  // exam's audio as one Blob — no chunking, nothing to concatenate. Safe to
+  // call more than once; later calls just return the same pending/resolved
+  // promise instead of stopping an already-stopped recorder.
+  const stopAudioRecording = useCallback((): Promise<Blob | null> => {
+    const recorder = audioRecorderRef.current;
+    if (!recorder || !audioResultRef.current) return Promise.resolve(null);
+    if (!audioStoppedRef.current) {
+      audioStoppedRef.current = true;
+      if (recorder.state !== 'inactive') recorder.stop();
+    }
+    return audioResultRef.current;
+  }, []);
 
   // ── Violation dispatcher ────────────────────────────────────────────────────
   const addViolation = useCallback((type: ViolationType, description?: string): Violation | undefined => {
@@ -269,49 +293,74 @@ export function useProctor({ enabled, onNewViolation, screenStream }: UseProctor
     const botInterval         = setInterval(checkBotPattern,  BOT_CHECK_MS);
 
     // ── Hidden camera for periodic snapshots ────────────────────────────────────
+    // Hard mode only (enableCamera doubles as the "full monitoring" gate).
+    // Camera-only — the mic is a separate stream (see below), acquired by
+    // the setup page at "Begin Exam", not re-requested here.
     let snapshotInterval: ReturnType<typeof setInterval> | null = null;
 
-    navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false })
-      .then(stream => {
-        streamRef.current = stream;
-        setState(prev => ({ ...prev, cameraStream: stream }));
-        const video = document.createElement('video');
-        video.muted       = true;
-        video.playsInline = true;
-        video.srcObject   = stream;
+    if (enableCamera) {
+      navigator.mediaDevices
+        .getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false })
+        .then(stream => {
+          streamRef.current = stream;
+          setState(prev => ({ ...prev, cameraStream: stream }));
+          const video = document.createElement('video');
+          video.muted       = true;
+          video.playsInline = true;
+          video.srcObject   = stream;
 
-        video.onloadedmetadata = () => {
-          video.play();
-          hiddenVideoRef.current = video;
+          video.onloadedmetadata = () => {
+            video.play();
+            hiddenVideoRef.current = video;
 
-          const captureSnapshot = () => {
-            if (!video.videoWidth) return;
-            try {
-              const canvas = document.createElement('canvas');
-              canvas.width  = video.videoWidth;
-              canvas.height = video.videoHeight;
-              canvas.getContext('2d')?.drawImage(video, 0, 0);
-              const image = canvas.toDataURL('image/jpeg', 0.8);
-              setState(prev => ({
-                ...prev,
-                periodicSnapshots: [
-                  ...prev.periodicSnapshots,
-                  { id: `snap-${Date.now()}`, timestamp: new Date(), image },
-                ],
-              }));
-            } catch { /* ignore canvas errors */ }
+            const captureSnapshot = () => {
+              if (!video.videoWidth) return;
+              try {
+                const canvas = document.createElement('canvas');
+                canvas.width  = video.videoWidth;
+                canvas.height = video.videoHeight;
+                canvas.getContext('2d')?.drawImage(video, 0, 0);
+                const image = canvas.toDataURL('image/jpeg', 0.8);
+                setState(prev => ({
+                  ...prev,
+                  periodicSnapshots: [
+                    ...prev.periodicSnapshots,
+                    { id: `snap-${Date.now()}`, timestamp: new Date(), image },
+                  ],
+                }));
+              } catch { /* ignore canvas errors */ }
+            };
+
+            snapshotInterval = setInterval(captureSnapshot, SNAPSHOT_INTERVAL_MS);
           };
+        })
+        .catch(() => {
+          setState(prev => ({
+            ...prev,
+            cameraError: 'Camera access denied — periodic snapshots disabled.',
+          }));
+        });
 
-          snapshotInterval = setInterval(captureSnapshot, SNAPSHOT_INTERVAL_MS);
-        };
-      })
-      .catch(() => {
-        setState(prev => ({
-          ...prev,
-          cameraError: 'Camera access denied — periodic snapshots disabled.',
-        }));
-      });
+      // ── Microphone: record the whole exam as ONE continuous recording ──────
+      // No timeslice on start(), so MediaRecorder buffers internally and
+      // only fires a single `dataavailable` when stop() completes — one
+      // Blob for the whole exam, nothing to chunk or concatenate.
+      if (audioStream && typeof MediaRecorder !== 'undefined') {
+        // Reset per-recorder guards for this run — in React Strict Mode
+        // (dev only) this effect runs setup→cleanup→setup once, and without
+        // this reset the cleanup's stopAudioRecording() call would leave
+        // audioStoppedRef stuck `true`, silently no-opping the real stop()
+        // at exam end and leaving the final Blob promise unresolved forever.
+        audioStoppedRef.current = false;
+        const recorder = new MediaRecorder(audioStream);
+        audioResultRef.current = new Promise<Blob | null>(resolve => {
+          recorder.ondataavailable = e => resolve(e.data.size > 0 ? e.data : null);
+        });
+        recorder.start();
+        audioRecorderRef.current = recorder;
+        setState(prev => ({ ...prev, audioReady: true }));
+      }
+    }
 
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
@@ -331,6 +380,16 @@ export function useProctor({ enabled, onNewViolation, screenStream }: UseProctor
       clearInterval(inactivityInterval);
       clearInterval(botInterval);
       if (snapshotInterval) clearInterval(snapshotInterval);
+      // Route through stopAudioRecording (not a bare .stop()) so the ref
+      // isn't torn down here — ExamInterface still needs to await the
+      // resolved Blob via this same function after this effect has
+      // already cleaned up (that's precisely when the exam ends). Only
+      // release the mic hardware itself (stop the track — this is what
+      // actually turns off the browser's recording indicator) once that
+      // final Blob has been captured, so nothing gets cut off mid-flush.
+      stopAudioRecording().then(() => {
+        audioStream?.getTracks().forEach(t => t.stop());
+      });
       screenTrackCleanup?.();
       // Restore original getDisplayMedia on exam end
       if (origGetDisplayMedia) {
@@ -341,7 +400,7 @@ export function useProctor({ enabled, onNewViolation, screenStream }: UseProctor
       hiddenVideoRef.current = null;
       setState(prev => ({ ...prev, isReady: false, isFullscreen: false, cameraStream: null }));
     };
-  }, [enabled, addViolation]);
+  }, [enabled, enableCamera, audioStream, addViolation, stopAudioRecording]);
 
-  return { ...state, addViolation };
+  return { ...state, addViolation, stopAudioRecording };
 }

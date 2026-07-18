@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { ExamConfig, CandidateInfo, Violation, AnswerValue } from '@/types';
+import { ExamConfig, CandidateInfo, Violation, PeriodicSnapshot, AnswerValue, ActivityEvent, ActivityEventType, SessionData } from '@/types';
+import { isCorrect } from '@/lib/grading';
 
 type ExamStatus = 'setup' | 'in-progress' | 'submitted' | 'terminated';
 
@@ -20,39 +21,7 @@ interface UseExamReturn {
   submitExam: () => void;
   terminateExam: () => void;
   startExam: () => void;
-  getSessionData: (candidate: CandidateInfo, violations: Violation[]) => object;
-}
-
-function isCorrect(q: ExamConfig['questions'][number], answer: AnswerValue): boolean {
-  if (q.qtype === 'MCQ') {
-    // answer = index into q.options array
-    return q.options[answer as number]?.is_correct === true;
-  }
-
-  if (q.qtype === 'Multi') {
-    // answer = number[] of selected indices into q.options
-    const selected = answer as number[];
-    const correctCount = q.options.filter(o => o.is_correct).length;
-    if (selected.length !== correctCount) return false;
-    return selected.every(i => q.options[i]?.is_correct === true);
-  }
-
-  if (q.qtype === 'Match') {
-    // answer = Record<pairId, selectedPairId> — user maps each left to a right
-    const userMap = answer as Record<number, number>;
-    return q.pairs.every(pair => userMap[pair.id] === pair.id);
-  }
-
-  if (q.qtype === 'Fill') {
-    // answer = Record<blankIndex, userAnswer>
-    const userAnswers = answer as Record<number, string>;
-    return q.blanks.every(blank => {
-      const typed = (userAnswers[blank.blank_index] ?? '').trim().toLowerCase();
-      return blank.accepted_answers.map(a => a.toLowerCase()).includes(typed);
-    });
-  }
-
-  return false;
+  getSessionData: (candidate: CandidateInfo, violations: Violation[], snapshots?: PeriodicSnapshot[]) => SessionData;
 }
 
 export function useExam(config: ExamConfig): UseExamReturn {
@@ -65,6 +34,21 @@ export function useExam(config: ExamConfig): UseExamReturn {
 
   const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<Date | null>(null);
+
+  // Detailed per-action analytics — only collected in medium/hard mode.
+  const trackActivity  = config.mode !== 'easy';
+  const activityLogRef = useRef<ActivityEvent[]>([]);
+
+  const logActivity = useCallback((type: ActivityEventType, questionId?: number, details?: Record<string, unknown>) => {
+    if (!trackActivity) return;
+    activityLogRef.current.push({
+      id: `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      type,
+      timestamp: new Date(),
+      questionId,
+      details,
+    });
+  }, [trackActivity]);
 
   const calculateScore = useCallback((currentAnswers: Record<number, AnswerValue>) => {
     let correct = 0;
@@ -89,8 +73,9 @@ export function useExam(config: ExamConfig): UseExamReturn {
       setScore(finalScore);
       return prev;
     });
+    logActivity('exam_submitted');
     setStatus('submitted');
-  }, [calculateScore, stopTimer]);
+  }, [calculateScore, stopTimer, logActivity]);
 
   const terminateExam = useCallback(() => {
     stopTimer();
@@ -99,12 +84,15 @@ export function useExam(config: ExamConfig): UseExamReturn {
       setScore(finalScore);
       return prev;
     });
+    logActivity('exam_terminated');
     setStatus('terminated');
-  }, [calculateScore, stopTimer]);
+  }, [calculateScore, stopTimer, logActivity]);
 
   const startExam = useCallback(() => {
     startTimeRef.current = new Date();
     setStatus('in-progress');
+    logActivity('exam_started');
+    logActivity('question_viewed', config.questions[0]?.id, { index: 0 });
     timerRef.current = setInterval(() => {
       setTimeRemaining(prev => {
         if (prev <= 1) {
@@ -115,35 +103,58 @@ export function useExam(config: ExamConfig): UseExamReturn {
         return prev - 1;
       });
     }, 1000);
-  }, [stopTimer, submitExam]);
+  }, [stopTimer, submitExam, logActivity, config.questions]);
 
   useEffect(() => () => stopTimer(), [stopTimer]);
 
   const setAnswer = useCallback((questionId: number, value: AnswerValue) => {
     setAnswers(prev => ({ ...prev, [questionId]: value }));
-  }, []);
+    logActivity('answer_changed', questionId, { value });
+  }, [logActivity]);
 
   const toggleMarkForReview = useCallback((questionId: number) => {
+    const willMark = !markedForReview.has(questionId);
     setMarkedForReview(prev => {
       const next = new Set(prev);
-      next.has(questionId) ? next.delete(questionId) : next.add(questionId);
+      willMark ? next.add(questionId) : next.delete(questionId);
       return next;
     });
-  }, []);
+    logActivity(willMark ? 'marked_for_review' : 'unmarked_for_review', questionId);
+  }, [markedForReview, logActivity]);
 
-  const goToQuestion = useCallback((i: number) => setCurrentQuestionIndex(i), []);
-  const nextQuestion = useCallback(() => setCurrentQuestionIndex(p => Math.min(p + 1, config.questions.length - 1)), [config.questions.length]);
-  const prevQuestion = useCallback(() => setCurrentQuestionIndex(p => Math.max(p - 1, 0)), []);
+  const goToQuestion = useCallback((i: number) => {
+    setCurrentQuestionIndex(i);
+    logActivity('question_viewed', config.questions[i]?.id, { index: i });
+  }, [config.questions, logActivity]);
 
-  const getSessionData = useCallback((candidate: CandidateInfo, violations: Violation[]) => ({
+  const nextQuestion = useCallback(() => {
+    const next = Math.min(currentQuestionIndex + 1, config.questions.length - 1);
+    setCurrentQuestionIndex(next);
+    logActivity('question_viewed', config.questions[next]?.id, { index: next });
+  }, [currentQuestionIndex, config.questions, logActivity]);
+
+  const prevQuestion = useCallback(() => {
+    const prev = Math.max(currentQuestionIndex - 1, 0);
+    setCurrentQuestionIndex(prev);
+    logActivity('question_viewed', config.questions[prev]?.id, { index: prev });
+  }, [currentQuestionIndex, config.questions, logActivity]);
+
+  const getSessionData = useCallback((
+    candidate: CandidateInfo,
+    violations: Violation[],
+    snapshots: PeriodicSnapshot[] = []
+  ): SessionData => ({
     sessionId: `SESSION-${Date.now()}`,
     candidate,
     examId: config.id,
     examName: config.name,
+    examMode: config.mode,
     startTime: startTimeRef.current,
     endTime: new Date(),
     answers,
     violations,
+    snapshots,
+    activityLog: activityLogRef.current,
     score,
     status,
     totalQuestions: config.questions.length,
