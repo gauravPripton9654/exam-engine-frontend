@@ -43,12 +43,6 @@ export default function ExamInterface({ candidate, exam, screenStream, audioStre
     onNewViolation,
   });
 
-  useEffect(() => {
-    if (status === 'in-progress' && securityEnabled && proctor.violations.length >= exam.maxViolations) {
-      submitExam();
-    }
-  }, [proctor.violations.length, exam.maxViolations, securityEnabled, status, submitExam]);
-
   const highViolations = proctor.violations.filter(v => v.severity === 'high').length;
   const answered = Object.keys(answers).length;
   const total    = exam.questions.length;
@@ -173,7 +167,7 @@ export default function ExamInterface({ candidate, exam, screenStream, audioStre
             </h2>
             <p className={`text-sm ${terminated ? 'text-rose-500' : 'text-slate-500'}`}>
               {terminated
-                ? `Exam ended after ${exam.maxViolations} proctoring violations.`
+                ? 'Exam was terminated.'
                 : 'Your responses have been recorded.'}
             </p>
 
@@ -344,7 +338,7 @@ export default function ExamInterface({ candidate, exam, screenStream, audioStre
                   <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
                 </svg>
                 <span className="text-xs font-bold text-rose-600">
-                  {proctor.violations.length}/{exam.maxViolations}
+                  {proctor.violations.length} violation{proctor.violations.length === 1 ? '' : 's'}
                 </span>
               </div>
             )}

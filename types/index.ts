@@ -122,7 +122,6 @@ export interface ExamConfig {
   id: string;
   name: string;
   duration: number;
-  maxViolations: number;
   mode: ExamMode;
   questions: Question[];
 }

@@ -98,7 +98,6 @@ function ExamPageContent() {
           id: String(curriculum.id),
           name: `${curriculum.title} — ${curriculum.role} @ ${curriculum.company}`,
           duration: 60 * 60,
-          maxViolations: 5,
           questions,
         });
       })
@@ -294,9 +293,7 @@ function ExamPageContent() {
             {[
               { label: 'Questions', value: String(examConfig.questions.length) },
               { label: 'Duration', value: `${examConfig.duration / 60} min` },
-              mode === 'easy'
-                ? { label: 'Mode', value: 'Timer Only' }
-                : { label: 'Max Violations', value: String(examConfig.maxViolations) },
+              { label: 'Mode', value: mode === null ? '—' : mode === 'easy' ? 'Timer Only' : mode === 'medium' ? 'Medium' : 'Hard' },
             ].map(({ label, value }) => (
               <div key={label} className="text-center px-4 first:pl-0 last:pr-0">
                 <p className="text-lg font-semibold text-slate-900">{value}</p>
@@ -557,9 +554,8 @@ function ExamPageContent() {
                   'Camera snapshots are taken every 2 minutes',
                   'Microphone audio is recorded throughout and transcribed',
                 ] : []),
-                mode !== 'easy'
-                  ? `Exam auto-submits after ${examConfig.maxViolations} violations, or when time runs out`
-                  : 'Exam auto-submits when time runs out',
+                ...(mode !== 'easy' ? ['Violations are recorded but do not end the exam'] : []),
+                'Exam auto-submits when time runs out',
               ].map(rule => (
                 <li key={rule} className="flex items-start gap-2">
                   <div className="w-1 h-1 rounded-full bg-amber-500 mt-1.5 shrink-0" />
