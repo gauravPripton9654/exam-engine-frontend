@@ -27,6 +27,36 @@ const SEVERITY_BADGE: Record<string, string> = {
   high:   'bg-rose-50 text-rose-700',
 };
 
+interface FaceDetectionData {
+  status?: unknown;
+  face_count?: unknown;
+}
+
+function getFaceStatus(faceDetection: unknown, error?: string) {
+  if (error) return { label: 'Face check failed', className: 'bg-rose-50 text-rose-700' };
+  if (!faceDetection || typeof faceDetection !== 'object') {
+    return { label: 'Face check unavailable', className: 'bg-slate-100 text-slate-600' };
+  }
+
+  const { status, face_count: faceCount } = faceDetection as FaceDetectionData;
+  const normalizedStatus = typeof status === 'string' ? status.toLowerCase() : '';
+  const countSuffix = typeof faceCount === 'number' ? ` (${faceCount})` : '';
+
+  if (normalizedStatus === 'no_face') {
+    return { label: `No face${countSuffix}`, className: 'bg-amber-50 text-amber-700' };
+  }
+  if (normalizedStatus === 'multiple_faces') {
+    return { label: `Multiple faces${countSuffix}`, className: 'bg-rose-50 text-rose-700' };
+  }
+  if (normalizedStatus) {
+    return {
+      label: `${normalizedStatus.replace(/_/g, ' ')}${countSuffix}`,
+      className: 'bg-emerald-50 text-emerald-700',
+    };
+  }
+  return { label: `Face check complete${countSuffix}`, className: 'bg-slate-100 text-slate-600' };
+}
+
 function formatDate(iso: string) {
   return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' });
 }
@@ -254,13 +284,21 @@ export default function AdminSessionDetailPage() {
                   <p className="text-sm font-semibold text-slate-700">Camera Snapshots ({detail.snapshots.length})</p>
                 </div>
                 <div className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  {detail.snapshots.map(snap => (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <div key={snap.id} className="rounded-lg overflow-hidden border border-slate-200">
-                      <img src={snap.image} alt="Candidate snapshot" className="w-full h-24 object-cover" />
-                      <p className="text-[10px] text-slate-400 px-2 py-1">{new Date(snap.timestamp).toLocaleTimeString()}</p>
-                    </div>
-                  ))}
+                  {detail.snapshots.map(snap => {
+                    const faceStatus = getFaceStatus(snap.faceDetection, snap.faceDetectionError);
+                    return (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <div key={snap.id} className="rounded-lg overflow-hidden border border-slate-200">
+                        <img src={snap.image} alt="Candidate snapshot" className="w-full h-24 object-cover" />
+                        <div className="px-2 pt-1.5">
+                          <span className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold capitalize ${faceStatus.className}`}>
+                            {faceStatus.label}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 px-2 py-1">{new Date(snap.timestamp).toLocaleTimeString()}</p>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

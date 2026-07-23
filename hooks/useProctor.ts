@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Violation, ViolationType, VIOLATION_CONFIG, PeriodicSnapshot } from '@/types';
+import { checkFaceDetection } from '@/lib/api';
 
 interface UseProctorOptions {
   enabled: boolean;
@@ -25,7 +26,7 @@ export interface ProctorState {
   cameraStream: MediaStream | null;
 }
 
-const SNAPSHOT_INTERVAL_MS = 2 * 60 * 1000;  // 2 minutes
+const SNAPSHOT_INTERVAL_MS = 10 *1000;  // 2 minutes
 const MOUSE_INACTIVE_MS    = 3 * 60 * 1000;  // 3 minutes with no mouse movement
 const BOT_CHECK_MS         = 30 * 1000;       // analyze mouse pattern every 30s
 const MIN_BOT_SPEEDS       = 20;              // minimum velocity samples needed for bot check
@@ -50,6 +51,15 @@ export function useProctor({ enabled, enableCamera, onNewViolation, screenStream
   const audioRecorderRef   = useRef<MediaRecorder | null>(null);
   const audioStoppedRef    = useRef(false);
   const audioResultRef     = useRef<Promise<Blob | null> | null>(null);
+  const snapshotsRef       = useRef<PeriodicSnapshot[]>([]);
+  const snapshotChecksRef  = useRef(new Set<Promise<void>>());
+
+  // Final session persistence must wait for checks started by a just-captured
+  // frame. The ref also avoids relying on a pending React state update.
+  const waitForSnapshotDetections = useCallback(async (): Promise<PeriodicSnapshot[]> => {
+    await Promise.allSettled([...snapshotChecksRef.current]);
+    return snapshotsRef.current;
+  }, []);
 
   // Stops the (single, continuous) recording and resolves with the whole
   // exam's audio as one Blob — no chunking, nothing to concatenate. Safe to
@@ -313,7 +323,7 @@ export function useProctor({ enabled, enableCamera, onNewViolation, screenStream
             video.play();
             hiddenVideoRef.current = video;
 
-            const captureSnapshot = () => {
+            const captureSnapshot = async () => {
               if (!video.videoWidth) return;
               try {
                 const canvas = document.createElement('canvas');
@@ -321,17 +331,47 @@ export function useProctor({ enabled, enableCamera, onNewViolation, screenStream
                 canvas.height = video.videoHeight;
                 canvas.getContext('2d')?.drawImage(video, 0, 0);
                 const image = canvas.toDataURL('image/jpeg', 0.8);
+                const capturedAt = new Date();
+                const imageBlob = await new Promise<Blob | null>(resolve => {
+                  canvas.toBlob(resolve, 'image/jpeg', 0.8);
+                });
+
+                let faceDetection: unknown | null = null;
+                let faceDetectionError: string | undefined;
+                if (imageBlob) {
+                  try {
+                    faceDetection = await checkFaceDetection(imageBlob, `snapshot-${capturedAt.getTime()}.jpg`);
+                  } catch (error) {
+                    faceDetectionError = error instanceof Error ? error.message : 'Face detection request failed';
+                  }
+                } else {
+                  faceDetectionError = 'Unable to encode snapshot image';
+                }
+
+                const snapshot: PeriodicSnapshot = {
+                  id: `snap-${capturedAt.getTime()}`,
+                  timestamp: capturedAt,
+                  image,
+                  faceDetection,
+                  ...(faceDetectionError ? { faceDetectionError } : {}),
+                };
+                snapshotsRef.current = [...snapshotsRef.current, snapshot];
                 setState(prev => ({
                   ...prev,
                   periodicSnapshots: [
                     ...prev.periodicSnapshots,
-                    { id: `snap-${Date.now()}`, timestamp: new Date(), image },
+                    snapshot,
                   ],
                 }));
               } catch { /* ignore canvas errors */ }
             };
 
-            snapshotInterval = setInterval(captureSnapshot, SNAPSHOT_INTERVAL_MS);
+            const startSnapshotCapture = () => {
+              const snapshotCheck = captureSnapshot();
+              snapshotChecksRef.current.add(snapshotCheck);
+              void snapshotCheck.finally(() => snapshotChecksRef.current.delete(snapshotCheck));
+            };
+            snapshotInterval = setInterval(startSnapshotCapture, SNAPSHOT_INTERVAL_MS);
           };
         })
         .catch(() => {
@@ -402,5 +442,5 @@ export function useProctor({ enabled, enableCamera, onNewViolation, screenStream
     };
   }, [enabled, enableCamera, audioStream, addViolation, stopAudioRecording]);
 
-  return { ...state, addViolation, stopAudioRecording };
+  return { ...state, addViolation, stopAudioRecording, waitForSnapshotDetections };
 }

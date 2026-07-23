@@ -147,6 +147,10 @@ export interface PeriodicSnapshot {
   id: string;
   timestamp: Date;
   image: string;
+  // Raw response from POST /face-detection/check for this exact image.
+  // `unknown` deliberately preserves the face service's response shape.
+  faceDetection: unknown | null;
+  faceDetectionError?: string;
 }
 
 // ── Audio transcription (hard mode) ───────────────────────────────────────────

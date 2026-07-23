@@ -75,6 +75,17 @@ export async function saveExamSession(session: SessionData): Promise<void> {
   await api.post('/sessions/', session);
 }
 
+// The service accepts a multipart file upload and owns the response schema, so
+// preserve the parsed response exactly for inclusion with the snapshot JSON.
+export async function checkFaceDetection(image: Blob, filename = 'snapshot.jpg'): Promise<unknown> {
+  const formData = new FormData();
+  formData.append('image', image, filename);
+  const { data } = await api.post('/face-detection/check', formData, {
+    headers: { 'Content-Type': undefined },
+  });
+  return data;
+}
+
 export interface SessionListParams {
   skip?: number;
   limit?: number;

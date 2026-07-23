@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { CandidateInfo, ExamConfig, Violation, SessionData, TranscriptStatus } from '@/types';
 import { useProctor } from '@/hooks/useProctor';
 import { useExam } from '@/hooks/useExam';
@@ -49,10 +49,18 @@ export default function ExamInterface({ candidate, exam, screenStream, audioStre
   const eyeStable = proctor.isFullscreen && proctor.isWindowFocused;
 
   // ── Persist the finished session to the backend ────────────────────────────
-  const session: SessionData | null = useMemo(() => {
-    if (status !== 'submitted' && status !== 'terminated') return null;
-    return getSessionData(candidate, proctor.violations, proctor.periodicSnapshots);
-  }, [status, candidate, getSessionData, proctor.violations, proctor.periodicSnapshots]);
+  const [session, setSession] = useState<SessionData | null>(null);
+  const sessionPreparedRef = useRef(false);
+  const { stopAudioRecording, waitForSnapshotDetections } = proctor;
+
+  useEffect(() => {
+    if ((status !== 'submitted' && status !== 'terminated') || sessionPreparedRef.current) return;
+    sessionPreparedRef.current = true;
+
+    void waitForSnapshotDetections().then(snapshots => {
+      setSession(getSessionData(candidate, proctor.violations, snapshots));
+    });
+  }, [status, candidate, getSessionData, proctor.violations, waitForSnapshotDetections]);
 
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const savedSessionIdRef = useRef<string | null>(null);
@@ -61,8 +69,6 @@ export default function ExamInterface({ candidate, exam, screenStream, audioStre
   const [transcriptStatus, setTranscriptStatus] = useState<TranscriptStatus>('none');
   const [transcriptText, setTranscriptText] = useState<string | null>(null);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
-  const { stopAudioRecording } = proctor;
-
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollAttemptRef = useRef(0);
 
@@ -127,6 +133,17 @@ export default function ExamInterface({ candidate, exam, screenStream, audioStre
   }, [session, persistSession]);
 
   // ── Result screen ──────────────────────────────────────────────────────────
+  if ((status === 'submitted' || status === 'terminated') && !session) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="text-center">
+          <div className="w-8 h-8 mx-auto mb-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-sm font-medium text-slate-700">Finalizing proctoring checks…</p>
+        </div>
+      </div>
+    );
+  }
+
   if ((status === 'submitted' || status === 'terminated') && session) {
     const passed     = score !== null && score >= 60;
     const terminated = status === 'terminated';
